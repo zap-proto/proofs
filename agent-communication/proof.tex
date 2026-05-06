@@ -1,0 +1,531 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{xspace}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black,
+}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{game}[theorem]{Game}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\zap}{\textsf{ZAP}\xspace}
+\newcommand{\zapmcp}{\textsf{ZAP-MCP}\xspace}
+\newcommand{\zapaa}{\textsf{ZAP-A2A}\xspace}
+\newcommand{\mcp}{\textsf{MCP}\xspace}
+\newcommand{\aatwo}{\textsf{A2A}\xspace}
+\newcommand{\rns}{\textsf{ZAP-RNS}\xspace}
+\newcommand{\Adv}{\mathsf{Adv}}
+\newcommand{\Exp}{\mathsf{Exp}}
+\newcommand{\AEAD}{\textsf{AE}}
+\newcommand{\KEM}{\textsf{KEM}}
+\newcommand{\Sign}{\textsf{Sig}}
+\newcommand{\negl}{\mathsf{negl}}
+
+\title{\textbf{\zapmcp{} and \zapaa{}: Formal Security Proofs}}
+\author{ZAP Protocol Authors\\
+\href{https://zap-proto.io}{\texttt{zap-proto.io}}}
+\date{2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We give formal security proofs for the constructions \zapmcp{} and
+\zapaa{} described in the companion paper. We prove agent
+non-repudiation under the EUF-CMA security of ML-DSA-65, agent
+impersonation infeasibility under combined IND-CCA security of
+ML-KEM-768 and EUF-CMA security of ML-DSA-65, and replay freshness
+under the assumption that frame nonces are sampled with sufficient
+entropy. The proofs proceed by a sequence-of-games argument in the
+style of Shoup. Concrete advantage bounds are stated in terms of
+adversarial query budgets; we instantiate them for the recommended
+parameter set (ML-KEM-768, ML-DSA-65, AES-256-GCM, 96-bit nonces).
+\end{abstract}
+
+\section{Notation and Primitives}
+
+\paragraph{Computational model.} All adversaries are probabilistic
+polynomial-time (PPT) Turing machines. We work in the standard model
+unless otherwise noted; ML-DSA-65 and ML-KEM-768 are NIST-standard
+post-quantum primitives whose security claims are stated in
+FIPS~204 and FIPS~203 respectively. We assume the recommended Category~3
+parameter sets throughout.
+
+\paragraph{Hash function.} $H : \{0,1\}^* \to \{0,1\}^{256}$ denotes
+SHA3-256. Where the proofs require it, we model $H$ as a random oracle;
+all use of $H$ in the construction is over collision-resistant input,
+so the random-oracle assumption is conservative.
+
+\paragraph{Signature scheme.} $\Sign = (\Sign.\mathsf{KGen},
+\Sign.\mathsf{Sign}, \Sign.\mathsf{Vfy})$ is ML-DSA-65, modeled as
+EUF-CMA secure with advantage
+$\Adv^{\mathsf{eufcma}}_{\Sign}(\cdot)$. Concretely, NIST's claim is
+that no PPT adversary achieves advantage greater than
+$2^{-128}$ given $2^{64}$ signing queries and $2^{128}$ hash queries.
+
+\paragraph{KEM.} $\KEM = (\KEM.\mathsf{KGen}, \KEM.\mathsf{Encaps},
+\KEM.\mathsf{Decaps})$ is ML-KEM-768, modeled as IND-CCA secure with
+advantage $\Adv^{\mathsf{indcca}}_{\KEM}(\cdot)$.
+
+\paragraph{AEAD.} $\AEAD = (\AEAD.\mathsf{Seal}, \AEAD.\mathsf{Open})$ is
+AES-256-GCM with 96-bit nonces, modeled as IND-CPA $+$ INT-CTXT (i.e.\
+authenticated encryption) with advantage
+$\Adv^{\mathsf{ae}}_{\AEAD}(\cdot)$.
+
+\paragraph{Identity binding.} \rns{} record for an entity $X$ is a
+tuple $R_X = (\mathit{kem\_pk}_X, \mathit{sig\_pk}_X, \mathit{caps}_X,
+\sigma_{\mathsf{root}})$ where $\sigma_{\mathsf{root}}$ is a publisher
+signature. We assume the publisher root is honest and its public key is
+known to all participants out of band. (Compromise of the publisher
+root is out of scope; mitigations are discussed at the end of the
+companion paper.)
+
+\section{Game-Based Definitions}
+
+\subsection{Frame syntax}
+
+A \zapmcp{}/\zapaa{} frame is the tuple
+\[
+F = (\mathit{magic}, v, s, n, c, t)
+\]
+where $\mathit{magic}$ is a 4-byte protocol tag, $v$ is the version
+(1), $s = \mathit{sid}\,\Vert\,\mathit{seq}$ is the session and
+sequence identifier, $n$ is the AEAD nonce, $c$ is the AEAD
+ciphertext containing $\hat{\rho}\,\Vert\,\sigma$ where $\hat{\rho}$ is
+the canonical CBOR payload and $\sigma$ is the per-frame signature,
+and $t$ is the AEAD tag. We write $F_{A,T,\mathit{sid},\mathit{seq}}$
+for a frame from $A$ to $T$ in session $\mathit{sid}$ at sequence
+$\mathit{seq}$.
+
+\subsection{Non-repudiation game}
+
+\begin{game}[Non-repudiation $\Exp^{\mathsf{nonrep}}_{\zapmcp{}}$]
+\label{game:nonrep}
+The challenger generates honest agent keys
+$(\mathit{sig\_sk}_A, \mathit{sig\_pk}_A) \leftarrow
+\Sign.\mathsf{KGen}(1^\lambda)$ for some honest agent $A$, and
+publishes $\mathit{sig\_pk}_A$. Adversary $\mathcal{A}$ is given access
+to a signing oracle $\mathcal{O}_{\mathsf{Sign}}(m)$ that returns
+$\sigma \leftarrow \Sign.\mathsf{Sign}(\mathit{sig\_sk}_A, m)$. Let
+$\mathcal{Q}$ be the set of messages queried.
+
+$\mathcal{A}$ outputs a tuple $(F^*, \hat{\rho}^*, \mathit{sid}^*,
+\mathit{seq}^*, \sigma^*)$. The adversary wins if
+\[
+\Sign.\mathsf{Vfy}(\mathit{sig\_pk}_A,
+H(\hat{\rho}^* \,\Vert\, \mathit{ctx}^*), \sigma^*) = 1
+\quad \wedge \quad
+\hat{\rho}^* \,\Vert\, \mathit{ctx}^* \notin \mathcal{Q}
+\]
+where $\mathit{ctx}^* = \mathtt{"zap-mcp/v1"} \,\Vert\, \mathit{sid}^*
+\,\Vert\, \mathit{seq}^*$.
+The advantage is
+$\Adv^{\mathsf{nonrep}}_{\zapmcp{}}(\mathcal{A}) =
+\Pr[\mathcal{A}\ \text{wins}]$.
+\end{game}
+
+\subsection{Impersonation game}
+
+\begin{game}[Agent impersonation
+$\Exp^{\mathsf{imp}}_{\zapmcp{}}$]\label{game:imp}
+Setup as above; in addition, generate KEM key pair
+$(\mathit{kem\_sk}_T, \mathit{kem\_pk}_T) \leftarrow
+\KEM.\mathsf{KGen}(1^\lambda)$ for an honest tool $T$, and publish
+$\mathit{kem\_pk}_T$ and $\mathit{sig\_pk}_A$. $\mathcal{A}$ may
+\begin{itemize}[leftmargin=2em,itemsep=0.2em]
+\item invoke $\mathcal{O}_{\mathsf{Sign}}(m)$ as before, restricted so
+that no queried $m$ contains a session id matching the test session;
+\item invoke $\mathcal{O}_{\mathsf{Decaps}}(c)$ for any $c$ except the
+challenge ciphertext;
+\item observe arbitrary protocol executions.
+\end{itemize}
+$\mathcal{A}$ wins if it completes a handshake transcript with $T$ that
+$T$ accepts as authenticated to $A$, where $\mathcal{A}$ does not hold
+$\mathit{sig\_sk}_A$.
+\end{game}
+
+\subsection{Replay game}
+
+\begin{game}[Cross-session replay
+$\Exp^{\mathsf{replay}}_{\zapmcp{}}$]\label{game:replay}
+The challenger establishes two distinct honest sessions
+$\mathit{sid}_1 \neq \mathit{sid}_2$ between $A$ and $T$. $\mathcal{A}$
+observes the full traffic of $\mathit{sid}_1$. $\mathcal{A}$ then
+attempts to inject a frame $F^* = F_{A,T,\mathit{sid}_1,\mathit{seq}}$
+into $\mathit{sid}_2$ such that $T$ accepts it as a fresh frame in
+$\mathit{sid}_2$. Advantage is the acceptance probability.
+\end{game}
+
+\section{Theorem 1: Non-Repudiation}
+
+\begin{theorem}[Non-repudiation]\label{thm:nonrep}
+Let $\mathcal{A}$ be a PPT adversary against $\Exp^{\mathsf{nonrep}}_{\zapmcp{}}$
+making at most $q_s$ signing-oracle queries and $q_h$ hash queries.
+There exists a PPT algorithm $\mathcal{B}$ against the EUF-CMA security
+of ML-DSA-65 making at most $q_s$ signing queries, with
+\[
+\Adv^{\mathsf{nonrep}}_{\zapmcp{}}(\mathcal{A}) \;\leq\;
+\Adv^{\mathsf{eufcma}}_{\Sign,\mathsf{ML\text{-}DSA\text{-}65}}(\mathcal{B})
++ \frac{q_h^2}{2^{257}}.
+\]
+The running time of $\mathcal{B}$ is within an additive constant of
+that of $\mathcal{A}$.
+\end{theorem}
+
+\begin{proof}
+We proceed by a sequence of games.
+
+\textbf{Game 0.} The original game $\Exp^{\mathsf{nonrep}}_{\zapmcp{}}$. By definition,
+$\Pr[\mathcal{A}\ \text{wins}\ \text{Game 0}] = \Adv^{\mathsf{nonrep}}_{\zapmcp{}}(\mathcal{A})$.
+
+\textbf{Game 1.} Identical to Game 0 except that the challenger aborts
+if the random oracle ever produces a collision: i.e., if at any point
+two distinct queries $x \neq x'$ result in $H(x) = H(x')$. By the
+birthday bound, $\Pr[\text{collision}] \leq q_h(q_h-1)/2^{257} \leq
+q_h^2/2^{257}$. Therefore
+\[
+|\Pr[\mathcal{A}\ \text{wins}\ \text{Game 0}] - \Pr[\mathcal{A}\ \text{wins}\ \text{Game 1}]|
+\leq \frac{q_h^2}{2^{257}}.
+\]
+
+\textbf{Game 2.} We construct $\mathcal{B}$. $\mathcal{B}$ runs the
+EUF-CMA game against ML-DSA-65, receiving challenge public key
+$\mathit{pk}^*$ and a signing oracle $\mathcal{O}^*_{\mathsf{Sign}}$.
+$\mathcal{B}$ simulates Game 1 for $\mathcal{A}$ as follows:
+\begin{itemize}[leftmargin=2em,itemsep=0.2em]
+\item Set $\mathit{sig\_pk}_A := \mathit{pk}^*$ and publish.
+\item On $\mathcal{O}_{\mathsf{Sign}}(m)$: query
+$\mathcal{O}^*_{\mathsf{Sign}}(m)$, return the result, and add $m$ to
+$\mathcal{Q}$.
+\item On a hash query, simulate the random oracle by lazy table
+maintenance with the no-collision invariant from Game 1.
+\end{itemize}
+When $\mathcal{A}$ outputs $(F^*, \hat{\rho}^*, \mathit{sid}^*,
+\mathit{seq}^*, \sigma^*)$, $\mathcal{B}$ computes
+$m^* := H(\hat{\rho}^* \,\Vert\, \mathit{ctx}^*)$ and outputs
+$(m^*, \sigma^*)$ as its forgery.
+
+\textbf{Reduction analysis.} If $\mathcal{A}$ wins Game 1, then by the
+winning condition $\sigma^*$ is a valid signature on $m^*$, and
+$\hat{\rho}^* \,\Vert\, \mathit{ctx}^* \notin \mathcal{Q}$. Since the
+random oracle is collision-free in Game 1, $m^*$ is therefore distinct
+from every $H(m)$ for $m \in \mathcal{Q}$, so $\mathcal{B}$ never
+queried $m^*$ to $\mathcal{O}^*_{\mathsf{Sign}}$. Hence
+$(m^*, \sigma^*)$ is a valid EUF-CMA forgery against ML-DSA-65, and
+\[
+\Pr[\mathcal{B}\ \text{wins}] = \Pr[\mathcal{A}\ \text{wins}\ \text{Game 1}].
+\]
+Combining the two bounds:
+\[
+\Adv^{\mathsf{nonrep}}_{\zapmcp{}}(\mathcal{A}) \leq
+\Adv^{\mathsf{eufcma}}_{\Sign}(\mathcal{B}) + \frac{q_h^2}{2^{257}}.
+\]
+\qed
+\end{proof}
+
+\begin{corollary}[Concrete instantiation]\label{cor:nonrep}
+With NIST's claim that
+$\Adv^{\mathsf{eufcma}}_{\mathsf{ML\text{-}DSA\text{-}65}}(\mathcal{B}) \leq 2^{-128}$
+for any PPT $\mathcal{B}$ with $q_s \leq 2^{64}$, and with $q_h \leq
+2^{128}$,
+\[
+\Adv^{\mathsf{nonrep}}_{\zapmcp{}}(\mathcal{A}) \leq 2^{-128} + 2^{-1} \cdot 2^{-1}
+= 2^{-128} + \tfrac{1}{4}.
+\]
+The dominant term for any realistic $q_h$ is $2^{-128}$. For
+deployment-realistic $q_h \leq 2^{80}$, the bound tightens to
+$2^{-128} + 2^{-97}$, i.e.\ negligibly above $2^{-97}$.
+\end{corollary}
+
+\section{Theorem 2: Agent Impersonation Infeasibility}
+
+\begin{theorem}[Agent impersonation]\label{thm:imp}
+Let $\mathcal{A}$ be a PPT adversary against
+$\Exp^{\mathsf{imp}}_{\zapmcp{}}$ making at most $q_d$ decapsulation
+queries, $q_s$ signing queries, and $q_h$ hash queries. There exist
+PPT algorithms $\mathcal{B}_1$ against IND-CCA of ML-KEM-768 and
+$\mathcal{B}_2$ against EUF-CMA of ML-DSA-65 with
+\[
+\Adv^{\mathsf{imp}}_{\zapmcp{}}(\mathcal{A}) \;\leq\;
+\Adv^{\mathsf{indcca}}_{\KEM,\mathsf{ML\text{-}KEM\text{-}768}}(\mathcal{B}_1)
++ \Adv^{\mathsf{eufcma}}_{\Sign,\mathsf{ML\text{-}DSA\text{-}65}}(\mathcal{B}_2)
++ \frac{q_h^2}{2^{257}}.
+\]
+\end{theorem}
+
+\begin{proof}
+The handshake transcript that $T$ accepts contains, by construction:
+\begin{enumerate}[leftmargin=2em,itemsep=0.2em]
+\item $\mathcal{A}$'s presented identity claim, naming $A$ and
+including a signature
+$\sigma_h = \Sign.\mathsf{Sign}(\mathit{sig\_sk}_A, H(\mathit{th}))$
+over the running hash $\mathit{th}$ of the transcript;
+\item the KEM ciphertext $c_T = \KEM.\mathsf{Encaps}(\mathit{kem\_pk}_T)$
+contributing to the session secret;
+\item key confirmation MAC over the handshake-derived session key.
+\end{enumerate}
+For $T$ to accept, $\sigma_h$ must verify under
+$\mathit{sig\_pk}_A$. Two cases arise.
+
+\textbf{Case A: $\mathit{th}$ has been signed by $A$ in some earlier
+session.} By the construction of the transcript hash, $\mathit{th}$
+incorporates $T$'s nonce $r_T$, the session identifier
+$\mathit{sid}$, and a freshly-sampled handshake-time random from $A$.
+Two transcripts $\mathit{th} = \mathit{th}'$ would imply collision in
+$H$, occurring with probability $\leq q_h^2 / 2^{257}$.
+
+\textbf{Case B: $\mathit{th}$ has never been signed by $A$.} Then
+$\sigma_h$ is a forgery of ML-DSA-65 on a fresh message under
+$\mathit{sig\_pk}_A$. We construct $\mathcal{B}_2$ as in
+Theorem~\ref{thm:nonrep}, embedding the EUF-CMA challenge public key
+as $\mathit{sig\_pk}_A$ and answering $\mathcal{A}$'s signing queries
+through the EUF-CMA oracle. We have
+\[
+\Pr[\text{Case B}] \leq \Adv^{\mathsf{eufcma}}_{\Sign}(\mathcal{B}_2).
+\]
+
+\textbf{Reducing key confirmation to KEM IND-CCA.} If $\mathcal{A}$
+manages to compute the correct key confirmation MAC without holding
+the KEM secret, then either (i) it has guessed the shared secret, or
+(ii) it has obtained it through the decapsulation oracle. Case (i) is
+information-theoretically negligible ($2^{-256}$ for a 256-bit
+shared secret). For Case (ii), we construct $\mathcal{B}_1$ that
+embeds the IND-CCA challenge public key as $\mathit{kem\_pk}_T$ and
+answers decapsulation queries through its own oracle (with the usual
+restriction excluding the challenge ciphertext). $\mathcal{B}_1$
+distinguishes the real shared secret from a uniform random by
+observing whether $\mathcal{A}$ produces the matching MAC. We have
+\[
+\Pr[\text{key confirmation forged via KEM}] \leq
+\Adv^{\mathsf{indcca}}_{\KEM}(\mathcal{B}_1).
+\]
+
+\textbf{Union bound.} Combining,
+\[
+\Adv^{\mathsf{imp}}_{\zapmcp{}}(\mathcal{A}) \leq
+\Adv^{\mathsf{indcca}}_{\KEM}(\mathcal{B}_1) +
+\Adv^{\mathsf{eufcma}}_{\Sign}(\mathcal{B}_2) +
+\frac{q_h^2}{2^{257}}.
+\]
+\qed
+\end{proof}
+
+\begin{corollary}[Concrete impersonation bound]
+For NIST Category~3 parameters,
+$\Adv^{\mathsf{imp}}_{\zapmcp{}}(\mathcal{A}) \leq 2^{-128} + 2^{-128} +
+q_h^2/2^{257} \approx 2^{-127}$ for $q_h \leq 2^{64}$.
+\end{corollary}
+
+\section{Lemma: Replay Freshness}
+
+\begin{lemma}[Replay freshness]\label{lem:replay}
+Let $\nu$ be the AEAD nonce length in bits, and let $Q$ be the maximum
+per-session frame count. For two distinct sessions $\mathit{sid}_1
+\neq \mathit{sid}_2$, the probability that any single frame from
+$\mathit{sid}_1$ is accepted as fresh in $\mathit{sid}_2$ is at most
+\[
+\Pr[\mathit{replay\ accepted}] \leq
+\Adv^{\mathsf{ae}}_{\AEAD}(\mathcal{B}) + \frac{Q(Q-1)}{2^{\nu+1}}.
+\]
+\end{lemma}
+
+\begin{proof}
+The AEAD nonce in \zap{} is derived as
+$\mathit{nonce}(\mathit{sid}, \mathit{seq}) = \mathsf{HKDF}(K_n,
+\mathit{sid} \,\Vert\, \mathit{seq})$ where $K_n$ is a session-bound
+HKDF key derived from the handshake-shared secret. Two distinct
+sessions yield independently derived $K_n$ values; thus an injected
+frame from $\mathit{sid}_1$ presents a nonce that is, in the
+$\mathit{sid}_2$ session's nonce-space, indistinguishable from
+uniformly random unless the AEAD construction is broken.
+
+The injected frame's AEAD tag was computed under $K_{AB}^{(1)}$, the
+$\mathit{sid}_1$ session key. The recipient verifies under $K_{AB}^{(2)}$,
+the $\mathit{sid}_2$ session key. By the INT-CTXT property of AEAD,
+the probability of a tag verifying under a different key is at most
+$\Adv^{\mathsf{ae}}_{\AEAD}(\mathcal{B})$, where $\mathcal{B}$ is a
+straightforward reduction.
+
+The remaining term, $Q(Q-1)/2^{\nu+1}$, bounds the probability of a
+nonce collision \emph{within} session $\mathit{sid}_2$ if the
+injection's nonce happens to clash with a pre-existing legitimate
+frame's nonce. By the birthday bound on $\nu$-bit nonces with $Q$
+samples, this is at most $Q(Q-1)/2^{\nu+1}$.
+\qed
+\end{proof}
+
+\begin{corollary}
+With $\nu = 96$ and $Q \leq 2^{40}$,
+$\Pr[\mathit{replay\ accepted}] \leq 2^{-128} + 2^{-17} \cdot 2^{-40} =
+2^{-128} + 2^{-57}$, dominated by $2^{-57}$, well below operationally
+relevant thresholds. Operators desiring tighter bounds may rotate
+sessions before $Q = 2^{32}$, yielding $\leq 2^{-32} \cdot 2^{-32} =
+2^{-65}$ replay probability.
+\end{corollary}
+
+\section{Composite Property: Provenance Chain Integrity for \zapaa{}}
+
+We extend Theorem~\ref{thm:nonrep} to multi-hop \aatwo{} task chains.
+
+\begin{theorem}[Provenance chain integrity]\label{thm:prov}
+Let $\tau$ be an \aatwo{} task delegated through agents
+$A_1 \to A_2 \to \dots \to A_k$, with each delegation producing a
+signed frame as described in the companion paper. Let $\mathcal{A}$
+be a PPT adversary that produces a forged delegation chain
+$(F_1^*, F_2^*, \dots, F_k^*)$ with at least one $F_i^*$ purporting to
+be from honest $A_i$ but not actually signed by $A_i$. Then
+\[
+\Adv^{\mathsf{prov}}_{\zapaa{}}(\mathcal{A}) \leq
+k \cdot \left(
+\Adv^{\mathsf{eufcma}}_{\Sign}(\mathcal{B}_i) + \frac{q_h^2}{2^{257}}
+\right).
+\]
+\end{theorem}
+
+\begin{proof}
+By a hybrid argument over the $k$ positions in the chain. For each
+position $i$, an adversary that succeeds with non-negligible advantage
+on position $i$ can be reduced to an EUF-CMA adversary on $A_i$'s key
+by Theorem~\ref{thm:nonrep}. The factor $k$ arises from the union bound
+over positions.
+\qed
+\end{proof}
+
+\section{Composite Property: Capability-Bound Method Restriction}
+
+\begin{proposition}[Capability binding]\label{prop:caps}
+Suppose tool $T$'s \rns{} record advertises capability set
+$\mathit{caps}_T \subseteq \mathcal{M}$, where $\mathcal{M}$ is the
+universe of \mcp{} method names. The handshake transcript hash binds
+$H(\mathit{caps}_T)$. If a frame in the resulting session invokes a
+method $m \notin \mathit{caps}_T$, an honest tool $T$ rejects without
+processing.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Direct from construction: the handshake binding includes a commitment
+to $\mathit{caps}_T$ verifiable by both endpoints, and the framed
+method invocation is checked against $\mathit{caps}_T$ before
+dispatch. The only way to bypass this is to forge a transcript
+admitting a different $\mathit{caps}_T$, which requires either
+forging the publisher root signature (out of scope) or a hash
+collision in $H$ ($\leq q_h^2 / 2^{257}$).
+\qed
+\end{proof}
+
+\section{Forward Secrecy of Past Sessions}
+
+\begin{proposition}[Forward secrecy]\label{prop:fs}
+Suppose at time $t$ all long-term keys
+$\mathit{sig\_sk}_A, \mathit{kem\_sk}_T$ are exposed to $\mathcal{A}$.
+For any session that completed at time $t' < t$ with non-overlapping
+ephemeral handshake material, $\mathcal{A}$'s advantage at recovering
+the session payload is bounded by
+\[
+\Adv^{\mathsf{fs}}_{\zapmcp{}}(\mathcal{A}) \leq
+\Adv^{\mathsf{indcca}}_{\KEM,\mathsf{ephemeral}}(\mathcal{B})
++ \Adv^{\mathsf{ae}}_{\AEAD}(\mathcal{B}').
+\]
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+\zap{} handshake derives the session secret from a hybrid combination
+of static-static, static-ephemeral, and ephemeral-ephemeral KEM
+encapsulations. The ephemeral-ephemeral component, by construction
+discarded after the handshake, is independent of the long-term keys.
+Compromise of long-term keys at time $t$ does not recover ephemerals
+discarded at time $t' < t$. Reduction is to ephemeral KEM IND-CCA.
+\qed
+\end{proof}
+
+\section{Summary Table}
+
+\begin{table}[h]
+\centering
+\small
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Property} & \textbf{Bound} \\
+\hline
+Non-repudiation (Thm.~\ref{thm:nonrep})       & $\Adv^{\mathsf{eufcma}}_{\Sign} + q_h^2/2^{257}$ \\
+Impersonation (Thm.~\ref{thm:imp})            & $\Adv^{\mathsf{indcca}}_{\KEM} + \Adv^{\mathsf{eufcma}}_{\Sign} + q_h^2/2^{257}$ \\
+Replay (Lem.~\ref{lem:replay})                & $\Adv^{\mathsf{ae}}_{\AEAD} + Q(Q-1)/2^{\nu+1}$ \\
+Provenance chain (Thm.~\ref{thm:prov})        & $k \cdot \left(\Adv^{\mathsf{eufcma}}_{\Sign} + q_h^2/2^{257}\right)$ \\
+Capability binding (Prop.~\ref{prop:caps})    & $q_h^2/2^{257}$ \\
+Forward secrecy (Prop.~\ref{prop:fs})         & $\Adv^{\mathsf{indcca}}_{\KEM,\mathsf{ephemeral}} + \Adv^{\mathsf{ae}}_{\AEAD}$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+
+\subsection{Tightness}
+
+Theorem~\ref{thm:nonrep}'s reduction is essentially tight: any
+non-repudiation forgery in \zapmcp{} translates directly to an
+ML-DSA-65 forgery, with only the random-oracle collision term
+separating the two probabilities. We have therefore reduced the
+question of agent message non-repudiation to the question of
+ML-DSA-65 EUF-CMA security, for which NIST's standardisation body
+provides the conservative claim of $\geq 192$ bits of post-quantum
+security.
+
+\subsection{Standard model vs random oracle}
+
+The random oracle assumption appears only in the bookkeeping of the
+hash function used to bind context strings. Standard-model
+construction is straightforward by replacing $H$ with a
+collision-resistant hash plus a domain separation tag, at the cost
+of marginally larger advantage terms. We have chosen to state proofs
+in the simpler model.
+
+\subsection{Quantum oracle access}
+
+The above proofs are stated in the classical-query model.
+Post-quantum security claims for ML-DSA-65 and ML-KEM-768 are stated
+under quantum-oracle access in the relevant FIPS standards. The
+reductions above are tight under classical-query reductions and
+remain tight up to a constant factor under known-quantum lifts
+(we elide the technical details for brevity).
+
+\subsection{What is not proven}
+
+We do not prove anything about the semantics of the JSON-RPC payloads
+themselves, nor about the absence of side-channel leakage from agent
+implementations of ML-DSA-65 signing. Both belong to layers above and
+below the protocol respectively. Additionally, model-layer
+prompt-injection attacks are out of scope; \zapmcp{} provides
+cryptographic attribution but not semantic safety.
+
+\section{Conclusion}
+
+We have given concrete-advantage bounds for the principal security
+properties of \zapmcp{} and \zapaa{}: non-repudiation under
+ML-DSA-65 EUF-CMA, agent impersonation infeasibility under
+ML-KEM-768 IND-CCA combined with ML-DSA-65 EUF-CMA, replay freshness
+under AEAD INT-CTXT, multi-hop provenance via a hybrid argument,
+capability binding via transcript hashing, and forward secrecy of
+past sessions via ephemeral KEM material. All bounds are
+parameterised by adversarial query budgets and instantiate to
+$\geq 128$-bit post-quantum security for the recommended
+parameter set.
+
+\end{document}

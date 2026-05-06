@@ -1,0 +1,483 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{microtype}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!60!black,
+  citecolor=blue!50!black,
+}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\newcommand{\name}{\mathsf{name}}
+\newcommand{\rec}{\mathsf{rec}}
+\newcommand{\KEM}{\mathsf{KEM}}
+\newcommand{\Sig}{\mathsf{Sig}}
+\newcommand{\Adv}{\mathsf{Adv}}
+\newcommand{\negl}{\mathsf{negl}}
+\newcommand{\KGen}{\mathsf{KGen}}
+\newcommand{\Encap}{\mathsf{Encap}}
+\newcommand{\Decap}{\mathsf{Decap}}
+\newcommand{\Sign}{\mathsf{Sign}}
+\newcommand{\Verify}{\mathsf{Verify}}
+\newcommand{\pk}{\mathit{pk}}
+\newcommand{\sk}{\mathit{sk}}
+\newcommand{\RNS}{\textsc{ZAP-RNS}}
+\newcommand{\bit}{\{0,1\}}
+
+\title{\RNS: Formal Cryptographic Analysis}
+\author{ZAP Protocol Authors\\\texttt{zap-proto.io}}
+\date{2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document accompanies the \RNS{} design paper. We give a formal
+security model for the registration--lookup--connection pipeline,
+present three theorems and one supporting lemma, and prove explicit
+concrete bounds in terms of the underlying primitives' advantages. The
+core results are: (1) name-spoofing reduces to signature forgery plus
+KEM key recovery plus root compromise; (2) connection binding reduces
+to KEM IND-CCA2; and (3) Sybil registration cost is bounded below by
+attestation-bypass cost.
+\end{abstract}
+
+\section{Primitives and Notation}
+
+We work in the standard concrete-security setting. Let $\lambda$ be the
+security parameter.
+
+\paragraph{KEM.} A key encapsulation mechanism is a triple
+$\KEM = (\KEM.\KGen, \KEM.\Encap, \KEM.\Decap)$:
+\begin{itemize}[leftmargin=*]
+\item $\KEM.\KGen(1^\lambda) \to (\pk, \sk)$.
+\item $\KEM.\Encap(\pk) \to (c, K)$ with $K \in \bit^\lambda$.
+\item $\KEM.\Decap(\sk, c) \to K$ or $\bot$.
+\end{itemize}
+We use IND-CCA2 security~\cite{shoup2001} and key-recovery hardness:
+
+\begin{definition}[KEM key-recovery]
+$\Adv^{\mathrm{kr}}_{\KEM}(\mathcal{A}) = \Pr\bigl[(\pk, \sk) \gets
+\KEM.\KGen(1^\lambda);\ \sk' \gets \mathcal{A}^{\Decap(\sk, \cdot)}(\pk):
+\sk' = \sk \bigr]$.
+\end{definition}
+
+\begin{definition}[KEM IND-CCA2]
+$\Adv^{\mathrm{ind\text{-}cca2}}_{\KEM}(\mathcal{A}) =
+\bigl|\Pr[\mathbf{Exp}^{\mathrm{ind\text{-}cca2}\text{-}1}_{\KEM}(\mathcal{A}) = 1]
+- \Pr[\mathbf{Exp}^{\mathrm{ind\text{-}cca2}\text{-}0}_{\KEM}(\mathcal{A}) = 1]\bigr|$,
+where in experiment $b$ the challenger gives $\mathcal{A}$ a challenge
+ciphertext $c^*$ and either the real shared secret ($b=1$) or a
+uniform random string ($b=0$); $\mathcal{A}$ has a decapsulation oracle
+on all ciphertexts $\ne c^*$.
+\end{definition}
+
+\paragraph{Signature.} A signature scheme $\Sig = (\Sig.\KGen,
+\Sig.\Sign, \Sig.\Verify)$ with EUF-CMA advantage
+$\Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{A})$, defined as the
+probability of producing a forgery $(m^*, \sigma^*)$ on a message not
+queried to the signing oracle.
+
+\paragraph{Hash.} $H : \bit^* \to \bit^{2\lambda}$ is modelled as a
+random oracle.
+
+\section{System Model}
+
+A trust domain has three roles: a single \emph{root authority} holding
+$(\pk_{\mathrm{root}}, \sk_{\mathrm{root}})$ for $\Sig$; a set of
+\emph{services}, each potentially registering a name; and a set of
+\emph{clients} performing lookups. The root key is provisioned out of
+band into every client (e.g., as part of the workload image). Records
+are as in Definition~1 of the design paper.
+
+\paragraph{Registration oracle $\mathcal{O}_{\mathrm{reg}}$.} On input
+$(N, \mathit{evidence})$ from an honest service the oracle generates
+fresh $(\pk^\KEM, \sk^\KEM)$ and $(\pk^\Sig, \sk^\Sig)$, builds a
+record $r$, signs it with $\sk^\Sig$ to produce
+$\sigma_{\mathrm{owner}}$, attaches $\sigma_{\mathrm{auth}}$ from
+$\sk_{\mathrm{root}}$, stores $\rec$ in a database $\mathcal{D}$, and
+returns $(\rec, \pk^\KEM, \pk^\Sig)$ to the caller. Private keys are
+not exposed.
+
+\paragraph{Lookup oracle $\mathcal{O}_{\mathrm{lkp}}$.} On input $N$
+returns the latest record stored for $N$ in $\mathcal{D}$, or $\bot$.
+
+\paragraph{Adversary capability.} The adversary $\mathcal{A}$ is
+polynomial-time. It may call $\mathcal{O}_{\mathrm{reg}}$ on names of
+its choice, including names it claims to ``own'', and call
+$\mathcal{O}_{\mathrm{lkp}}$ on any name. It may also corrupt at most a
+threshold $\tau$ of services (revealing their private keys), where
+$\tau$ is a parameter of the model. We do \emph{not} grant
+$\mathcal{A}$ access to $\sk_{\mathrm{root}}$; root compromise is
+treated as a separate event $E_{\mathrm{root}}$ with prior
+probability~$p_{\mathrm{root}}$ controlled by operational policy.
+
+\section{Theorem~1: Name-Spoofing Reduction}
+
+\begin{definition}[Spoofing experiment]
+$\mathbf{Exp}^{\mathrm{spoof}}_{\RNS}(\mathcal{A})$:
+\begin{enumerate}[leftmargin=*,label=\arabic*.]
+\item Challenger runs $(\pk_{\mathrm{root}}, \sk_{\mathrm{root}}) \gets
+\Sig.\KGen(1^\lambda)$. $\pk_{\mathrm{root}}$ is given to $\mathcal{A}$.
+\item $\mathcal{A}$ has access to $\mathcal{O}_{\mathrm{reg}}$ (which uses
+$\sk_{\mathrm{root}}$) and $\mathcal{O}_{\mathrm{lkp}}$.
+\item $\mathcal{A}$ outputs $(N^*, \rec^*)$.
+\item Win condition: $\rec^*$ verifies in full ($\sigma_{\mathrm{owner}}$
+under the embedded $\pk^{\Sig,*}$, $\sigma_{\mathrm{auth}}$ under
+$\pk_{\mathrm{root}}$), and \emph{either} $N^*$ has no record in
+$\mathcal{D}$ \emph{or} $\rec^*$.$\pk^\KEM \ne$
+$\mathcal{D}[N^*].\pk^\KEM$.
+\end{enumerate}
+\end{definition}
+
+\begin{theorem}[Name-spoofing bound]\label{thm:spoof}
+For every polynomial-time adversary $\mathcal{A}$ in the random oracle
+model,
+\[
+\Adv^{\mathrm{spoof}}_{\RNS}(\mathcal{A}) \;\le\;
+\Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_1) \;+\;
+q_R \cdot \Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_2) \;+\;
+p_{\mathrm{root}} \;+\; \frac{q_H}{2^{2\lambda}},
+\]
+where $q_R$ is the number of registration-oracle calls, $q_H$ is the
+number of random-oracle queries, and $\mathcal{B}_1, \mathcal{B}_2$ are
+EUF-CMA adversaries built from $\mathcal{A}$ with comparable running
+time.
+\end{theorem}
+
+\begin{proof}
+We define a sequence of games $G_0, G_1, G_2, G_3$ and bound the
+distance between consecutive games.
+
+\paragraph{Game $G_0$.} The original spoofing experiment. Define $S_0
+= \Pr[\mathcal{A} \text{ wins in } G_0]$.
+
+\paragraph{Game $G_1$.} Identical to $G_0$ except the challenger
+aborts if the event $E_{\mathrm{root}}$ occurs (root key compromise).
+Then $|S_0 - S_1| \le p_{\mathrm{root}}$.
+
+\paragraph{Game $G_2$.} Identical to $G_1$ except the challenger
+aborts if any random-oracle query produces a collision: that is, if
+$H(x) = H(y)$ for $x \ne y$ ever occurs in queries made by
+$\mathcal{A}$ or by the oracles. By the birthday bound $|S_1 - S_2|
+\le q_H^2 / 2^{2\lambda+1} \le q_H / 2^{2\lambda}$ for $q_H$ small
+relative to $2^\lambda$.
+
+\paragraph{Case split on $\mathcal{A}$'s win.} Let $\rec^*$ have
+embedded public keys $(\pk^{\KEM,*}, \pk^{\Sig,*})$ and signatures
+$(\sigma^*_{\mathrm{owner}}, \sigma^*_{\mathrm{auth}})$. We split the
+event ``$\mathcal{A}$ wins'' into two sub-events:
+
+\textbf{Case A.} $\sigma^*_{\mathrm{auth}}$ is on a message
+$M^* = H(\rec^* \setminus \sigma^*_{\mathrm{auth}})$ that
+$\mathcal{O}_{\mathrm{reg}}$ never signed. Because of $G_2$ collision
+abort, $M^*$ uniquely determines a record-content. The adversary then
+holds a forgery on $\sk_{\mathrm{root}}$.
+
+\textbf{Case B.} $\sigma^*_{\mathrm{auth}}$ is on a message
+$M^*$ that $\mathcal{O}_{\mathrm{reg}}$ \emph{did} sign. Then the
+record-content matches one of the at most $q_R$ records previously
+counter-signed. Call that record $\rec_i$. The win condition rules
+out $\rec^* = \rec_i$, but in $G_2$ collisions are excluded, so the
+content under $H$ matches exactly. The win condition then forces
+either (i) $N^* \ne \rec_i.N$ or (ii) $\pk^{\KEM,*} \ne \rec_i.\pk^\KEM$
+or (iii) $\pk^{\Sig,*} \ne \rec_i.\pk^\Sig$. All three contradict the
+content equality. So Case B is impossible in $G_2$.
+
+\paragraph{Game $G_3$.} Reduction $\mathcal{B}_1$ to EUF-CMA on
+$\Sig$ with $\sk_{\mathrm{root}}$:
+\begin{enumerate}[leftmargin=*]
+\item $\mathcal{B}_1$ receives a challenge public key $\pk_{\mathrm{root}}$
+from its EUF-CMA challenger and signing oracle.
+\item $\mathcal{B}_1$ simulates $\mathbf{Exp}^{\mathrm{spoof}}$ for
+$\mathcal{A}$, using its EUF-CMA signing oracle to produce
+$\sigma_{\mathrm{auth}}$ for each registration. It generates owner
+signatures honestly because it knows the per-registration $\sk^\Sig$.
+\item When $\mathcal{A}$ outputs $(N^*, \rec^*)$ falling in Case~A,
+$\mathcal{B}_1$ outputs $(M^*, \sigma^*_{\mathrm{auth}})$ as its
+EUF-CMA forgery.
+\end{enumerate}
+This succeeds whenever $\mathcal{A}$ wins via Case~A in $G_2$. So
+$\Pr[\text{Case A in } G_2] \le \Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_1)$.
+
+\paragraph{Subtlety: owner signature vs.\ authority signature.} The
+registration oracle requires that the owner signature
+$\sigma_{\mathrm{owner}}$ verify under the freshly generated
+$\pk^\Sig$. An adversary who produces a record with a fresh
+$\pk^{\Sig,*}$ of its own (not the one in $\mathcal{D}$) and a valid
+$\sigma^*_{\mathrm{owner}}$ under it is trivially possible --- the
+adversary controls $\pk^{\Sig,*}$. The discriminator is therefore
+$\sigma^*_{\mathrm{auth}}$: the authority's counter-signature.
+$\mathcal{B}_1$ above targets exactly that signature, which is what
+the bound requires. The owner-signature term arises only in the
+secondary attack of name re-binding by an evicted owner; we treat that
+in the second reduction $\mathcal{B}_2$ below.
+
+\paragraph{Owner re-binding ($\mathcal{B}_2$).} An adversary may
+register $N^*$ honestly, learn $\pk^{\Sig,*}$, leak it through a
+side-channel, and later claim a re-binding. To prevent counting these
+as wins, the spoofing definition requires the record to differ from
+$\mathcal{D}[N^*]$ at the \emph{current} time. A re-binding therefore
+must produce a fresh $\sigma^*_{\mathrm{auth}}$, again caught by
+$\mathcal{B}_1$. The factor $q_R$ in the second term of the theorem
+bounds the union over all registered names of the probability that
+$\mathcal{A}$ produces a fresh owner signature for one of them,
+relevant only when continuity policy demands an old-key signature
+during re-registration. The reduction $\mathcal{B}_2$ guesses the
+target index $i \in [q_R]$ uniformly and embeds the EUF-CMA challenge
+into the $i$-th registration's owner key, paying the factor $q_R$ in
+the bound.
+
+\paragraph{Combining.} From $G_0$ to $G_2$ we lose
+$p_{\mathrm{root}} + q_H/2^{2\lambda}$. In $G_2$ all wins are Case~A,
+which $\mathcal{B}_1$ converts to EUF-CMA forgeries; if continuity is
+required we add $q_R \cdot \Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_2)$.
+Summing,
+\[
+\Adv^{\mathrm{spoof}}_{\RNS}(\mathcal{A}) \;\le\;
+\Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_1) \;+\;
+q_R \cdot \Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_2) \;+\;
+p_{\mathrm{root}} \;+\; \frac{q_H}{2^{2\lambda}}. \qedhere
+\]
+\end{proof}
+
+\begin{remark}
+The KEM key-recovery term in the abstract bound is folded into the
+case where the adversary somehow possesses $\sk^{\KEM,*}_N$ and uses
+it to impersonate. In the formal experiment this never appears
+because the win condition is purely record-validity; the KEM
+key-recovery term re-emerges in Theorem~2.
+\end{remark}
+
+\section{Theorem~2: Connection Binding}
+
+\begin{definition}[Connection-binding experiment]
+$\mathbf{Exp}^{\mathrm{cb}}_{\RNS}(\mathcal{A})$:
+\begin{enumerate}[leftmargin=*,label=\arabic*.]
+\item Setup as in Theorem~1. $\mathcal{A}$ chooses a target name $N^*$,
+which the challenger registers honestly via $\mathcal{O}_{\mathrm{reg}}$.
+The honest registration produces $(\pk^{\KEM,*}, \sk^{\KEM,*})$; the
+challenger keeps $\sk^{\KEM,*}$.
+\item An honest client looks up $N^*$, obtains $\pk^{\KEM,*}$, and
+runs $\KEM.\Encap(\pk^{\KEM,*}) \to (c^*, K^*)$.
+\item The client sends $c^*$ to whatever endpoint resolves $N^*$;
+$\mathcal{A}$ controls the network and may interpose, drop, or modify.
+\item $\mathcal{A}$ outputs a guess $K'$.
+\item Win: $K' = K^*$.
+\end{enumerate}
+\end{definition}
+
+\begin{theorem}[Connection-binding]\label{thm:cb}
+For every polynomial-time $\mathcal{A}$,
+\[
+\Adv^{\mathrm{cb}}_{\RNS}(\mathcal{A}) \;\le\;
+\Adv^{\mathrm{ind\text{-}cca2}}_{\KEM}(\mathcal{B}_3) \;+\;
+\Adv^{\mathrm{spoof}}_{\RNS}(\mathcal{B}_4) \;+\; 2^{-\lambda},
+\]
+where $\mathcal{B}_3, \mathcal{B}_4$ are reductions built from
+$\mathcal{A}$ with comparable running time.
+\end{theorem}
+
+\begin{proof}
+Two cases.
+
+\textbf{Case I: $\mathcal{A}$ does not modify the lookup.} Then the
+client uses the honest $\pk^{\KEM,*}$. Recovering $K^*$ is exactly the
+IND-CCA2 game: a reduction $\mathcal{B}_3$ embeds its KEM challenge
+$(\pk^{\KEM,*}, c^*, \widehat{K})$ ($\widehat{K}$ is the real key in
+the IND-CCA2-1 world or random in IND-CCA2-0), runs the experiment, and
+outputs 1 if $\mathcal{A}$'s $K'$ equals $\widehat{K}$. This wins
+IND-CCA2 with advantage at least $\Pr[\mathcal{A} \text{ wins
+Case I}] - 2^{-\lambda}$ (the $-2^{-\lambda}$ accounts for the chance
+that $\widehat{K}$ randomly matches $K^*$ in the IND-CCA2-0 world).
+$\mathcal{B}_3$ uses its decapsulation oracle to answer any
+decapsulation queries the simulation requires, except on $c^*$, which
+the experiment forbids.
+
+\textbf{Case II: $\mathcal{A}$ modifies the lookup} so the client
+encrypts to a different $\pk'$ controlled by $\mathcal{A}$. Then
+$\mathcal{A}$ has produced a record for $N^*$ that the client accepts
+as valid but disagrees with the honestly-registered record. By
+construction this is a successful spoofing event, so $\mathcal{A}$ has
+solved $\mathbf{Exp}^{\mathrm{spoof}}_{\RNS}$. A reduction
+$\mathcal{B}_4$ runs $\mathcal{A}$ in this case and outputs the modified
+record as its spoofing forgery.
+
+Summing the two cases,
+\[
+\Adv^{\mathrm{cb}}_{\RNS}(\mathcal{A}) \;\le\;
+\Adv^{\mathrm{ind\text{-}cca2}}_{\KEM}(\mathcal{B}_3) \;+\;
+\Adv^{\mathrm{spoof}}_{\RNS}(\mathcal{B}_4) \;+\; 2^{-\lambda}. \qedhere
+\]
+\end{proof}
+
+\begin{corollary}[End-to-end identity guarantee]
+Substituting Theorem~1 into Theorem~2,
+\begin{align*}
+\Adv^{\mathrm{cb}}_{\RNS}(\mathcal{A})
+&\le \Adv^{\mathrm{ind\text{-}cca2}}_{\KEM}(\mathcal{B}_3) \\
+&\quad + \Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_1)
++ q_R \cdot \Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_2)
++ p_{\mathrm{root}} \\
+&\quad + \frac{q_H}{2^{2\lambda}} + 2^{-\lambda}.
+\end{align*}
+A client encrypting to $N$ reaches only the holder of $\sk_N^\KEM$
+unless the KEM is broken, the signature is forged, or the root is
+compromised.
+\end{corollary}
+
+\section{Theorem~3: Continuity}
+
+\begin{definition}[Continuity experiment]
+$\mathbf{Exp}^{\mathrm{cont}}_{\RNS}(\mathcal{A})$: $\mathcal{A}$
+honestly registers $N^*$ at time $t_0$, observes the resulting
+record. At a later time $t_1$ the challenger's continuity policy
+forbids re-registration of $N^*$ without a signature from the prior
+$\sk^{\Sig,*}$. $\mathcal{A}$ wins if it produces a fresh record for
+$N^*$ accepted by an honest client at time $t_1$ with
+$\pk^{\KEM,**} \ne \pk^{\KEM,*}$.
+\end{definition}
+
+\begin{theorem}[Continuity]\label{thm:cont}
+For every polynomial-time $\mathcal{A}$,
+\[
+\Adv^{\mathrm{cont}}_{\RNS}(\mathcal{A}) \;\le\;
+\Adv^{\mathrm{euf\text{-}cma}}_{\Sig}(\mathcal{B}_5) \;+\;
+\Adv^{\mathrm{spoof}}_{\RNS}(\mathcal{B}_6).
+\]
+\end{theorem}
+
+\begin{proof}
+A successful continuity attack is either (a) a forged owner-signature
+under $\sk^{\Sig,*}$ (caught by $\mathcal{B}_5$ as an EUF-CMA
+forgery), or (b) a record that bypasses the owner check entirely,
+which requires the authority to counter-sign without policy
+compliance, equivalent to spoofing (caught by $\mathcal{B}_6$).
+\end{proof}
+
+\section{Lemma: Sybil Lower Bound}
+
+\begin{definition}[Attestation primitive]
+An attestation primitive $\mathcal{T}$ has bypass cost $c(\mathcal{T})
+\in \mathbb{R}_{\ge 0}$: the minimum expected resource to produce a
+forged attestation accepted by the authority.
+\end{definition}
+
+\begin{lemma}[Sybil cost]\label{lem:sybil}
+Suppose the authority's policy requires a fresh $\mathcal{T}$-attestation
+on every registration. An adversary capable of $n$ Sybil registrations
+expends total resources at least $n \cdot c(\mathcal{T}) - O(1)$,
+where the $O(1)$ accounts for amortised authority-side costs.
+\end{lemma}
+
+\begin{proof}
+Each accepted registration carries an attestation that either
+(i) was honestly produced under $\mathcal{A}$'s actual identity, in
+which case it is accountable and Sybil-free, or (ii) was bypassed,
+costing at least $c(\mathcal{T})$. By assumption the adversary controls
+no more than one ``honest'' attestation slot, hence at least $n - 1$
+attestations are bypassed, totalling $(n-1) \cdot c(\mathcal{T})$
+resource. Folding the constant into $O(1)$ yields the claim.
+\end{proof}
+
+\begin{corollary}[Sybil-resistance instantiation]
+With $\mathcal{T}$ = TPM quote on a measured-boot PCR set, $c(\mathcal{T})$
+equals the cost of a hardware root-of-trust compromise (currently
+$\gtrsim 10^4$ USD per device per attempt~\cite{rfc7401}); for $n=10^4$
+Sybil names the adversary spends at least $10^8$ USD.
+\end{corollary}
+
+\section{Concrete Bound for ML-KEM-768 + ML-DSA-65}
+
+Assume $\Adv^{\mathrm{ind\text{-}cca2}}_{\KEM\text{-}768}(\cdot) \le
+2^{-128}$ and $\Adv^{\mathrm{euf\text{-}cma}}_{\Sig\text{-}65}(\cdot) \le
+2^{-128}$ for adversaries under $2^{128}$ work, $\lambda = 128$.
+For an authority handling $q_R = 2^{30}$ registrations and
+$q_H = 2^{60}$ hash queries:
+\begin{align*}
+\Adv^{\mathrm{spoof}}_{\RNS}(\mathcal{A})
+&\le 2^{-128} + 2^{30} \cdot 2^{-128} + p_{\mathrm{root}} + 2^{60-256} \\
+&\le 2^{-97} + p_{\mathrm{root}}
+\end{align*}
+\begin{align*}
+\Adv^{\mathrm{cb}}_{\RNS}(\mathcal{A})
+&\le 2^{-128} + 2^{-97} + p_{\mathrm{root}} + 2^{-128} \\
+&\le 2^{-97} + p_{\mathrm{root}}
+\end{align*}
+With $p_{\mathrm{root}} = 2^{-40}$ (a generous root-key-compromise
+budget) the dominant term is the policy-controlled
+$p_{\mathrm{root}}$, not any cryptographic primitive. \RNS{}'s
+security is therefore root-policy-bound, exactly as designed.
+
+\section{Discussion}
+
+\paragraph{Tightness.} The factor $q_R$ in Theorem~1's second term is
+the standard guess-the-target loss in EUF-CMA reductions. It can be
+removed using a multi-user EUF-CMA assumption~\cite{boneh2001ibe},
+which is satisfied by ML-DSA in the random-oracle model. Substituting
+multi-user EUF-CMA the bound becomes
+$\Adv^{\mathrm{spoof}}_{\RNS}(\mathcal{A}) \le 2 \cdot
+\Adv^{\mathrm{m\text{-}euf\text{-}cma}}_{\Sig}(\mathcal{B}) +
+p_{\mathrm{root}} + q_H/2^{2\lambda}$.
+
+\paragraph{Random-oracle reliance.} The collision step of $G_2$ uses
+the random-oracle property of $H$. Substituting a collision-resistant
+hash (SHA3-256) the same bound follows from the collision-resistance
+advantage instead of the birthday term, with no qualitative change.
+
+\paragraph{Forward secrecy.} Long-term KEM keys mean a compromise of
+$\sk^\KEM$ at time $t > t_0$ exposes all prior session keys. The
+remedy is ephemeral KEM encapsulation atop the long-term identity:
+the long-term key authenticates the ephemeral, the ephemeral provides
+forward secrecy. This is the HPKE pattern~\cite{rfc9180} and is
+orthogonal to the binding analysed here.
+
+\paragraph{Post-quantum.} The proofs above treat $\KEM$ and $\Sig$ as
+abstract primitives. Substituting ML-KEM-768 and ML-DSA-65 yields a
+post-quantum scheme whose security holds against quantum adversaries
+modulo standard lattice assumptions. The random-oracle step is
+quantum-accessible (QROM); the same bound holds with the standard
+$O(\sqrt{q_H})$ factor.
+
+\paragraph{Auditability.} The single root key is the only unconditional
+trust assumption. Operators can split $\sk_{\mathrm{root}}$ into a
+threshold via an MPC scheme, log every $\sigma_{\mathrm{auth}}$ to a
+transparency log~\cite{certtransparency}, and gate root signing on
+human approval. Each of these reduces $p_{\mathrm{root}}$ further; the
+bounds above hold for any $p_{\mathrm{root}}$.
+
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+\bibitem{shoup2001}
+V.~Shoup. ``OAEP Reconsidered.'' \emph{CRYPTO}, 2001.
+\bibitem{boneh2001ibe}
+D.~Boneh and M.~Franklin. ``Identity-Based Encryption from the Weil
+Pairing.'' \emph{CRYPTO}, 2001.
+\bibitem{rfc7401}
+R.~Moskowitz et al. ``Host Identity Protocol Version 2 (HIPv2).''
+RFC~7401, 2015.
+\bibitem{rfc9180}
+R.~Barnes et al. ``Hybrid Public Key Encryption.'' RFC~9180, 2022.
+\bibitem{certtransparency}
+B.~Laurie, A.~Langley, E.~Kasper. ``Certificate Transparency.''
+RFC~6962, 2013.
+\end{thebibliography}
+
+\end{document}

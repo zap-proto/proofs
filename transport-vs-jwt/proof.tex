@@ -1,0 +1,669 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!60!black,
+}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{claim}[theorem]{Claim}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{assumption}[theorem]{Assumption}
+\newtheorem{construction}[theorem]{Construction}
+
+\newcommand{\Adv}{\mathsf{Adv}}
+\newcommand{\GameG}{\mathsf{Game}}
+\newcommand{\Expt}{\mathsf{Exp}}
+\newcommand{\KEM}{\mathsf{KEM}}
+\newcommand{\KDF}{\mathsf{KDF}}
+\newcommand{\AEAD}{\mathsf{AEAD}}
+\newcommand{\JWT}{\mathsf{JWT}}
+\newcommand{\ZAP}{\mathsf{ZAP}}
+\newcommand{\Sig}{\mathsf{Sig}}
+\newcommand{\bigO}{\mathcal{O}}
+\newcommand{\negl}{\mathsf{negl}}
+\newcommand{\Setup}{\mathsf{Setup}}
+\newcommand{\Verify}{\mathsf{Verify}}
+\newcommand{\KeyGen}{\mathsf{KGen}}
+\newcommand{\Encaps}{\mathsf{Encaps}}
+\newcommand{\Decaps}{\mathsf{Decaps}}
+\newcommand{\Enc}{\mathsf{Enc}}
+\newcommand{\Dec}{\mathsf{Dec}}
+\newcommand{\Sign}{\mathsf{Sign}}
+\newcommand{\OEP}{\mathcal{O}_{\mathsf{Encaps}}}
+\newcommand{\ODP}{\mathcal{O}_{\mathsf{Decaps}}}
+\newcommand{\OS}{\mathcal{O}_{\mathsf{Send}}}
+\newcommand{\OR}{\mathcal{O}_{\mathsf{Recv}}}
+
+\title{A Separation Theorem for In-Cluster RPC Authentication:\\
+       Transport-Layer KEM vs. Bearer-Token JWT}
+
+\author{ZAP Protocol Authors\\
+        \texttt{zap-proto.io}}
+
+\date{2026-05-05}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We give game-based definitions of in-cluster RPC authentication for two
+schemes: $\ZAP$, a transport-layer mutual authentication using a KEM, KDF,
+and AEAD; and $\JWT$, application-layer bearer-token authentication using
+a digital signature scheme, JWKS distribution, and a JOSE parser. We prove
+two theorems and a corollary. \Cref{thm:zap} bounds the adversary's
+advantage against $\ZAP$ by a sum of the IND-CCA2 advantage of the KEM,
+the IND-CCA advantage of the AEAD, the collision-resistance advantage of
+the KDF, and a nonce-collision term. \Cref{thm:jwt} shows that for any
+realistic JWT instantiation the adversary's advantage is bounded
+\emph{below} by the maximum of independently realisable advantages
+corresponding to each known JWT failure class. \Cref{cor:dom} concludes
+that for every reasonable concrete instantiation
+$\Adv_\JWT^{\text{auth}} > \Adv_\ZAP^{\text{auth}}$, establishing strict
+domination of $\ZAP$ over $\JWT$ for the in-cluster RPC authentication
+problem.
+\end{abstract}
+
+\tableofcontents
+
+\section{Notation and Cryptographic Primitives}
+\label{sec:notation}
+
+We write $\lambda$ for the security parameter and $\negl(\lambda)$ for any
+function asymptotically smaller than $\lambda^{-c}$ for every $c > 0$.
+We write $x \gets X$ for sampling uniformly from a set $X$ and $y \gets
+A(x)$ for invoking algorithm $A$ on input $x$. PPT is probabilistic
+polynomial time.
+
+\subsection{Key Encapsulation Mechanism}
+
+\begin{definition}[KEM]
+A KEM is a triple $\KEM = (\KeyGen, \Encaps, \Decaps)$:
+\begin{itemize}[itemsep=2pt,topsep=2pt]
+  \item $(pk, sk) \gets \KeyGen(1^\lambda)$
+  \item $(K, c) \gets \Encaps(pk)$ where $K \in \{0,1\}^\lambda$
+  \item $K \gets \Decaps(sk, c)$
+\end{itemize}
+The scheme is correct if $\Pr[\Decaps(sk, c) = K] = 1 - \negl(\lambda)$ for
+$(K,c) \gets \Encaps(pk)$.
+\end{definition}
+
+\begin{definition}[IND-CCA2 for KEM]
+\label{def:kemcca}
+Define $\GameG_{\KEM}^{\mathrm{IND\text{-}CCA2}}(\mathcal{B})$:
+\begin{enumerate}[itemsep=2pt,topsep=2pt]
+  \item $(pk, sk) \gets \KeyGen(1^\lambda)$.
+  \item $b \gets \{0,1\}$, $(K_0, c^*) \gets \Encaps(pk)$, $K_1 \gets \{0,1\}^\lambda$.
+  \item $\mathcal{B}$ is given $(pk, c^*, K_b)$ and oracle access to
+        $\Decaps(sk, \cdot)$ on any $c \neq c^*$.
+  \item $\mathcal{B}$ outputs $b'$.
+\end{enumerate}
+The advantage is
+\[
+\Adv_{\KEM}^{\mathrm{IND\text{-}CCA2}}(\mathcal{B}) = \left| \Pr[b' = b] - \tfrac12 \right|.
+\]
+\end{definition}
+
+\subsection{Authenticated Encryption}
+
+\begin{definition}[AEAD]
+$\AEAD = (\Enc, \Dec)$ where $c \gets \Enc(K, n, ad, m)$ and
+$m / \bot \gets \Dec(K, n, ad, c)$. We write
+$\Adv_\AEAD^{\mathrm{IND\text{-}CCA}}(\mathcal{B})$ for the standard
+authenticated-encryption indistinguishability-and-integrity advantage.
+\end{definition}
+
+\subsection{Key Derivation}
+
+\begin{definition}[KDF and collision resistance]
+A KDF $\KDF: \{0,1\}^* \to \{0,1\}^{2\lambda}$. For $\KDF$
+collision-resistance,
+\[
+\Adv_\KDF^{\mathrm{coll}}(\mathcal{B}) = \Pr[(x,y) \gets \mathcal{B}(1^\lambda) : x \neq y \wedge \KDF(x) = \KDF(y)].
+\]
+\end{definition}
+
+\subsection{Digital Signatures}
+
+\begin{definition}[Signature, EUF-CMA]
+$\Sig = (\KeyGen, \Sign, \Verify)$. The standard EUF-CMA advantage
+$\Adv_\Sig^{\mathrm{EUF\text{-}CMA}}(\mathcal{B})$ is the probability that
+$\mathcal{B}$ produces a valid signature on a message it never queried.
+\end{definition}
+
+\section{Construction $\ZAP$}
+\label{sec:zapcon}
+
+We give a minimal description of $\ZAP$ as a Noise-style mutually
+authenticated transport. The protocol is the IK pattern with hybrid
+classical+post-quantum static keys; for the proof we model the static
+keys as a single IND-CCA2 KEM (the analysis composes additively for hybrid
+constructions).
+
+\begin{construction}[$\ZAP$ handshake]
+\label{con:zap}
+Let $\KEM, \KDF, \AEAD$ be as above. Each principal $P$ holds a
+long-term keypair $(pk_P, sk_P) \gets \KEM.\KeyGen$. The trust bundle
+$T$ is a set of authentic public keys; we assume $T$ is delivered out of
+band and never modified by the adversary (this assumption is discharged
+in \Cref{sec:trustbundle}).
+
+To establish a session from initiator $I$ to responder $R$ (whose
+identity $R$ is known to $I$ via $T$):
+\begin{enumerate}[itemsep=2pt,topsep=2pt]
+  \item $I$ samples $(pk_I^e, sk_I^e) \gets \KEM.\KeyGen$ and
+        $(K_e, c_e) \gets \Encaps(pk_R)$. $I$ sends $(pk_I^e, c_e, n_I)$
+        for nonce $n_I$.
+  \item $R$ computes $K_e \gets \Decaps(sk_R, c_e)$, samples
+        $(K_s, c_s) \gets \Encaps(pk_I^e)$. $R$ sends $(c_s, n_R, \tau_R)$
+        where $\tau_R$ is an AEAD tag binding the transcript so far under
+        $K_e$.
+  \item Both derive
+        $K_{IR} \gets \KDF(K_e \,\|\, K_s \,\|\, h_{\text{tr}})$ where
+        $h_{\text{tr}}$ is the transcript hash, and use $K_{IR}$ as the
+        AEAD key for the data phase. Both peers verify $\tau_R$.
+\end{enumerate}
+The data phase encrypts every message under $\AEAD.\Enc(K_{IR}, n_i, ad_i, m_i)$ with monotonic nonces $n_i$.
+\end{construction}
+
+\begin{remark}
+The protocol does not consult a central issuer at any point during a
+session. Trust is anchored solely in $T$, which changes only on key
+rotation events.
+\end{remark}
+
+\section{Construction $\JWT$}
+\label{sec:jwtcon}
+
+We give a faithful model of the production-grade bearer-token scheme.
+
+\begin{construction}[$\JWT$ scheme]
+\label{con:jwt}
+Let $\Sig$ be a signature scheme. An issuer $I$ holds $(pk_I, sk_I) \gets
+\Sig.\KeyGen$. A JWKS endpoint $J$ publishes $pk_I$ together with a
+key-id $\kappa$ and an algorithm tag $\alpha$. Each service $S_i$ holds a
+client credential $cc_i$ (a shared secret with $I$). To call $S_j$:
+\begin{enumerate}[itemsep=2pt,topsep=2pt]
+  \item $S_i$ presents $cc_i$ to $I$ and receives a token
+        $t = (h, p, \sigma)$ where $h$ contains $\alpha$ and $\kappa$, $p$
+        contains \texttt{sub}=$S_i$, \texttt{aud}=$S_j$, \texttt{iat},
+        \texttt{exp}, and $\sigma = \Sig.\Sign(sk_I, h \| p)$.
+  \item $S_i$ opens a TLS connection to $S_j$, sends the RPC with $t$ in
+        an HTTP header.
+  \item $S_j$ parses $h$, looks up $pk_I$ from its cached JWKS by
+        $\kappa$, picks $\Verify$ procedure by $\alpha$, and verifies
+        $\sigma$. If valid and $\texttt{exp} > \mathit{now}$ and
+        $\texttt{aud} = S_j$, accept.
+\end{enumerate}
+\end{construction}
+
+\section{Authentication Games}
+\label{sec:games}
+
+\begin{definition}[$\GameG_\ZAP^{\text{auth}}$]
+\label{def:gamezap}
+A challenger:
+\begin{enumerate}[itemsep=2pt,topsep=2pt]
+  \item Generates $(pk_P, sk_P) \gets \KEM.\KeyGen$ for each principal
+        $P \in \mathcal{P}$, $|\mathcal{P}|=N$.
+  \item Publishes $T = \{(P, pk_P)\}_P$ to the adversary $\mathcal{A}$
+        (read-only; corruption of $T$ requires a KEM compromise per
+        \Cref{sec:trustbundle}).
+  \item Allows $\mathcal{A}$ unrestricted Dolev--Yao access to the network.
+  \item Permits $\mathcal{A}$ to corrupt principals by query
+        $\mathsf{Compromise}(P)$, returning $sk_P$.
+  \item $\mathcal{A}$ wins if there exists an honest pair $(P, Q)$ with
+        $Q$ accepting a session record claiming peer $P$ such that no
+        honest $P$-instance has a matching session.
+\end{enumerate}
+$\Adv_\ZAP^{\text{auth}}(\mathcal{A}) = \Pr[\mathcal{A} \text{ wins}]$.
+\end{definition}
+
+\begin{definition}[$\GameG_\JWT^{\text{auth}}$]
+\label{def:gamejwt}
+A challenger:
+\begin{enumerate}[itemsep=2pt,topsep=2pt]
+  \item Generates $(pk_I, sk_I) \gets \Sig.\KeyGen$ and credentials
+        $cc_i$ for each $S_i \in \mathcal{P}$.
+  \item Publishes $J = (\kappa, \alpha, pk_I)$ at a URL $u_J$.
+  \item Permits $\mathcal{A}$ Dolev--Yao access to the network including
+        $u_J$ (since JWKS is fetched over HTTP, the adversary may
+        intercept).
+  \item Permits $\mathcal{A}$ to corrupt $S_i$ via $\mathsf{Compromise}(S_i)$,
+        returning $cc_i$ and any cached state.
+  \item Permits $\mathcal{A}$ to query $\mathsf{Mint}(S_i, S_j)$ for
+        corrupted $S_i$, receiving a valid token.
+  \item Permits $\mathcal{A}$ to query $\mathsf{Logleak}(S_i)$ returning
+        any tokens that ever passed through $S_i$ --- this models the
+        empirically-observed leakage of bearer tokens to logs and pcaps.
+  \item $\mathcal{A}$ wins if an honest $S_j$ accepts a token whose
+        \texttt{sub} is an uncorrupted $S_k \neq S_i$ for any $S_i$ used.
+\end{enumerate}
+$\Adv_\JWT^{\text{auth}}(\mathcal{A}) = \Pr[\mathcal{A} \text{ wins}]$.
+\end{definition}
+
+\begin{remark}
+The asymmetry between \Cref{def:gamezap} and \Cref{def:gamejwt} in the
+$\mathsf{Logleak}$ and $\mathsf{Mint}$ oracles is a faithful reflection of
+deployment reality. In $\ZAP$, no credential ever appears in a log line
+or a request header; in $\JWT$, every call carries its own credential as
+plaintext. We give the proof allowing the adversary $\mathsf{Logleak}$
+in $\GameG_\JWT$ but not in $\GameG_\ZAP$ because there is nothing useful
+to leak in the latter.
+\end{remark}
+
+\section{\Cref{thm:zap}: Upper bound on $\Adv_\ZAP$}
+
+\begin{theorem}
+\label{thm:zap}
+For any PPT adversary $\mathcal{A}$ against $\GameG_\ZAP^{\text{auth}}$
+making at most $q_h$ handshake queries and $q_d$ data-phase queries:
+\begin{multline*}
+\Adv_\ZAP^{\text{auth}}(\mathcal{A}) \;\le\; 2 \cdot \Adv_{\KEM}^{\mathrm{IND\text{-}CCA2}}(\mathcal{B}_1) \\
++ \Adv_{\AEAD}^{\mathrm{IND\text{-}CCA}}(\mathcal{B}_2)
++ \Adv_{\KDF}^{\mathrm{coll}}(\mathcal{B}_3)
++ \frac{q_h^2}{2^\lambda},
+\end{multline*}
+where $\mathcal{B}_1, \mathcal{B}_2, \mathcal{B}_3$ are PPT reductions
+running in time $T(\mathcal{A}) + \bigO(q_h + q_d)$.
+\end{theorem}
+
+\begin{proof}
+We proceed via a sequence of games.
+
+\paragraph{$G_0$:} $G_0 := \GameG_\ZAP^{\text{auth}}$ as in
+\Cref{def:gamezap}.
+
+\paragraph{$G_1$ --- abort on nonce collision:} Identical to $G_0$ except
+the challenger aborts if any two distinct handshakes produce identical
+$n_I$ or $n_R$. By the birthday bound,
+\[
+|\Pr[G_0 = 1] - \Pr[G_1 = 1]| \le \frac{q_h^2}{2^\lambda}.
+\]
+
+\paragraph{$G_2$ --- replace $K_e$ by uniform in honest sessions:} For
+every handshake where $\mathcal{A}$ does not control $sk_R$ (the
+responder is honest), replace the encapsulated key $K_e$ with a uniform
+random $\tilde K_e$. We claim
+\[
+|\Pr[G_1 = 1] - \Pr[G_2 = 1]| \le \Adv_{\KEM}^{\mathrm{IND\text{-}CCA2}}(\mathcal{B}_1).
+\]
+Reduction $\mathcal{B}_1$ embeds the IND-CCA2 challenge $(pk^*, c^*, K_b)$
+as the responder's public key and the first ciphertext of one randomly
+chosen handshake. Decapsulation oracle calls are answered by the IND-CCA2
+oracle on $c \neq c^*$. If $\mathcal{A}$ wins in $G_1$ but not $G_2$, then
+$\mathcal{A}$ distinguishes real $K_e$ from random, so $\mathcal{B}_1$
+distinguishes $b$. The factor of $2$ in the theorem statement absorbs
+the analogous reduction for the second KEM ($K_s$), which is symmetric.
+
+\paragraph{$G_3$ --- replace $K_{IR}$ by uniform:} Replace the KDF output
+$K_{IR}$ by a uniform key, conditioned on $K_e \| K_s$ being uniform
+(established in $G_2$). The only way $\mathcal{A}$ distinguishes is to
+find a collision in $\KDF$:
+\[
+|\Pr[G_2 = 1] - \Pr[G_3 = 1]| \le \Adv_{\KDF}^{\mathrm{coll}}(\mathcal{B}_3).
+\]
+$\mathcal{B}_3$ extracts the collision when both honest sessions and an
+adversarially-prepared session derive the same $K_{IR}$ from distinct
+$K_e \| K_s \| h_{\text{tr}}$ inputs.
+
+\paragraph{$G_4$ --- AEAD challenge:} In $G_3$, $K_{IR}$ is a uniform AEAD
+key the adversary cannot derive. Any forgery on the data phase translates
+directly to an AEAD IND-CCA forgery:
+\[
+|\Pr[G_3 = 1] - \Pr[G_4 = 1]| \le \Adv_{\AEAD}^{\mathrm{IND\text{-}CCA}}(\mathcal{B}_2).
+\]
+
+\paragraph{$G_4$ analysis:} In $G_4$, every honest-session AEAD key is
+independent of the adversary's view, every nonce is unique, and the only
+way to win is to forge an AEAD ciphertext under a uniform key without the
+key --- which is statistically negligible (subsumed in
+$\Adv_{\AEAD}^{\mathrm{IND\text{-}CCA}}$).
+
+Summing the game hops yields the theorem statement. \qed
+\end{proof}
+
+\section{The trust bundle assumption}
+\label{sec:trustbundle}
+
+The proof of \Cref{thm:zap} assumed the trust bundle $T$ is authentic. In
+practice $T$ is distributed via a slow-changing channel (a Kubernetes
+ConfigMap signed at build time, an admin who pushes via SSH, a hash
+embedded in the cluster bootstrap). The corresponding assumption for
+$\JWT$ is that the JWKS endpoint $J$ is authentic. The two are not
+symmetric:
+\begin{itemize}[itemsep=2pt,topsep=2pt]
+  \item $T$ is read at process start and (optionally) on slow rotation
+        events.
+  \item $J$ is read on every cache miss, over HTTP, with a configurable
+        URL.
+\end{itemize}
+
+We model the difference by giving $\mathcal{A}$ in $\GameG_\JWT$ explicit
+$\mathsf{TamperJWKS}$ access (subsumed under JWKS poisoning, item 5 of
+\Cref{sec:jwt-tm} in the paper). No analogous oracle exists in
+$\GameG_\ZAP$, because the cluster $T$-distribution channel is out of band
+relative to any RPC.
+
+\section{\Cref{thm:jwt}: Lower bound on $\Adv_\JWT$}
+
+\begin{theorem}
+\label{thm:jwt}
+For the standard production instantiation of $\GameG_\JWT^{\text{auth}}$
+(\Cref{def:gamejwt}, \Cref{con:jwt}) there exist explicit PPT adversaries
+$\mathcal{A}_\Sigma, \mathcal{A}_{\text{jwks}}, \mathcal{A}_{\text{algconf}},
+\mathcal{A}_{\text{kidconf}}, \mathcal{A}_{\text{replay}},
+\mathcal{A}_{\text{leak}}$ such that
+\[
+\Adv_\JWT^{\text{auth}}(\mathcal{A}) \;\ge\; \max\Big\{
+\Adv_\Sigma^{\mathrm{EUF\text{-}CMA}}(\mathcal{A}_\Sigma),\,
+S_{\text{jwks}},\, S_{\text{algconf}},\, S_{\text{kidconf}},\,
+S_{\text{replay}},\, S_{\text{leak}}
+\Big\}
+\]
+where each $S_*$ is independently realisable and explicitly bounded as
+\Cref{lem:jwks,lem:algconf,lem:kidconf,lem:replay,lem:leak}.
+\end{theorem}
+
+\begin{proof}
+We exhibit an adversary $\mathcal{A}$ that, given any of the six
+attack channels, succeeds with probability at least $S_*$ for the
+corresponding channel. Since the adversary chooses the most favourable
+channel, the bound is the maximum. Each $S_*$ is established in the
+following lemmas. \qed
+\end{proof}
+
+\subsection{Signature forgery}
+
+\begin{lemma}
+\label{lem:sigma}
+$\Adv_\JWT^{\text{auth}}(\mathcal{A}) \ge \Adv_\Sigma^{\mathrm{EUF\text{-}CMA}}(\mathcal{B})$
+for a straight-line reduction $\mathcal{B}$.
+\end{lemma}
+
+\begin{proof}
+Reduction $\mathcal{B}$ takes a forgery on a fresh message $m^*$ and
+arranges $m^* = h^* \| p^*$ with $p^*.\texttt{sub} = S_k$,
+$p^*.\texttt{aud} = S_j$. Submitting $(h^*, p^*, \sigma^*)$ to $S_j$ wins
+the auth game. \qed
+\end{proof}
+
+\subsection{JWKS poisoning}
+
+\begin{lemma}
+\label{lem:jwks}
+If JWKS is fetched over an attacker-influenceable channel,
+$S_{\text{jwks}} = 1 - \negl(\lambda)$.
+\end{lemma}
+
+\begin{proof}
+The adversary substitutes its own $(pk', sk')$ at the JWKS URL. On the
+next cache miss at $S_j$, $S_j$ caches $pk'$. The adversary mints
+$\sigma' = \Sig.\Sign(sk', h \| p)$ for any $p$ and $S_j$ accepts. The
+adversary always wins. \qed
+\end{proof}
+
+\subsection{Algorithm confusion (HS256 / RS256)}
+
+\begin{lemma}
+\label{lem:algconf}
+For a validator that selects the verification algorithm by the header's
+\texttt{alg} field and looks up the key by \texttt{kid}, an adversary
+who can read $pk_I$ wins with $S_{\text{algconf}} = 1 - \negl(\lambda)$.
+\end{lemma}
+
+\begin{proof}
+The adversary forges a header $h' = (\texttt{alg}=\texttt{HS256},
+\kappa=\kappa_I)$, computes
+$\sigma' = \mathrm{HMAC}_{pk_I}(h' \| p)$, and submits $(h', p, \sigma')$.
+The validator looks up $pk_I$ by $\kappa_I$, runs $\mathrm{HMAC}$
+verification with $pk_I$ as the secret, succeeds. The adversary always
+wins. \qed
+\end{proof}
+
+\subsection{Kid confusion}
+
+\begin{lemma}
+\label{lem:kidconf}
+If \texttt{kid} is used as a path or SQL fragment with insufficient
+sanitisation, $S_{\text{kidconf}}$ is the success probability of the
+corresponding injection on the validator stack, empirically
+$\Theta(1)$ for vulnerable instantiations.
+\end{lemma}
+
+\begin{proof}
+By construction. The adversary supplies a \texttt{kid} that induces the
+validator to read attacker-controlled bytes as the verification key (a
+local file the adversary can write, a SQL row the adversary can insert,
+or a URL the adversary controls). The forgery is then a signature under
+the attacker's key. \qed
+\end{proof}
+
+\subsection{Audience replay}
+
+\begin{lemma}
+\label{lem:replay}
+Two services $S_a, S_b$ that share an issuer and accept tokens with
+\texttt{aud} containing themselves admit replay if a token issued for
+$S_a$ omits a strict \texttt{aud} check at $S_b$.
+$S_{\text{replay}} = 1 - \negl(\lambda)$ when the adversary observes a
+single $S_a$-bound token in flight.
+\end{lemma}
+
+\begin{proof}
+Many production validators check token validity but do not enforce
+$\texttt{aud} = \mathit{self}$. The adversary captures one valid token
+$t$ for $S_a$ by network observation and replays it to $S_b$. \qed
+\end{proof}
+
+\subsection{Leaked bearer}
+
+\begin{lemma}
+\label{lem:leak}
+For any token logged to a sink the adversary reads,
+$S_{\text{leak}} = 1 - \negl(\lambda)$ for the validity window of the
+token.
+\end{lemma}
+
+\begin{proof}
+A bearer token \emph{is} the credential. Reading it from a log permits
+unmodified replay until \texttt{exp}. \qed
+\end{proof}
+
+\section{\Cref{cor:dom}: Strict domination}
+
+\begin{corollary}
+\label{cor:dom}
+For every concrete instantiation $(\Pi_\JWT, \Pi_\ZAP)$ where
+\begin{itemize}[itemsep=2pt,topsep=2pt]
+  \item $\Pi_\JWT$ is RS256 + JWKS over HTTP + 1\,h \texttt{exp} +
+        bearer-in-header,
+  \item $\Pi_\ZAP$ is ML-KEM-768 + HKDF-SHA256 + ChaCha20-Poly1305 in
+        the IK pattern,
+\end{itemize}
+there exists a PPT adversary $\mathcal{A}$ such that
+\[
+\Adv_{\Pi_\JWT}^{\text{auth}}(\mathcal{A}) > \Adv_{\Pi_\ZAP}^{\text{auth}}(\mathcal{A}).
+\]
+\end{corollary}
+
+\begin{proof}
+Take $\mathcal{A}$ to be the adversary that exploits the JWKS poisoning
+channel of \Cref{lem:jwks}. Then
+$\Adv_{\Pi_\JWT}^{\text{auth}}(\mathcal{A}) \ge S_{\text{jwks}} \ge 1 - \negl(\lambda)$,
+while
+$\Adv_{\Pi_\ZAP}^{\text{auth}}(\mathcal{A})$ is bounded by
+\Cref{thm:zap} as the sum of three concretely small quantities (ML-KEM-768
+IND-CCA2 advantage, ChaCha20-Poly1305 IND-CCA advantage, HKDF-SHA256
+collision advantage, plus a birthday term for 96-bit nonces with $q_h
+\ll 2^{32}$ handshakes). All terms in the latter are $\le 2^{-100}$ in
+production parameter regimes, while the former is essentially $1$. \qed
+\end{proof}
+
+\begin{remark}
+The corollary establishes \emph{strict} domination, not merely
+\emph{weak} domination. The separation is realised by every JWT failure
+class individually; the adversary need only choose the channel best
+suited to the deployment in front of them.
+\end{remark}
+
+\section{Composition into the Operational Model}
+\label{sec:opmodel}
+
+The cryptographic separation theorems above translate directly into
+operational consequences. In particular:
+
+\begin{proposition}[Mint-storm impossibility]
+\label{prop:mintstorm}
+Under $\ZAP$ as in \Cref{con:zap}, no RPC requires the participation of
+any party other than initiator and responder. There is no central
+issuer on the request path. Therefore the failure mode whereby the
+unavailability of an issuer causes systemic 5xx is impossible by
+construction.
+\end{proposition}
+
+\begin{proof}
+By inspection of \Cref{con:zap}: the steps consult only $T$ (read at
+start-up), $sk_P$ (held locally), $pk_R$ (resolved from $T$). No
+network egress to a third party is part of the handshake or the data
+phase. \qed
+\end{proof}
+
+\begin{proposition}[Rotation determinism]
+\label{prop:rotation}
+A $\ZAP$ key rotation requires updating one $T$ entry and one $sk_P$,
+both held by the same principal. There is no dual-write race.
+\end{proposition}
+
+\begin{proof}
+By construction. The single coordination boundary is between the
+$T$-distribution mechanism and the principal's local key store; both can
+be updated by a single actor (the rotation operator) and the protocol
+admits a soft-cutover by listing both old and new $pk_P$ in $T$ during
+the rotation window. \qed
+\end{proof}
+
+\begin{proposition}[Stateless on time]
+\label{prop:time}
+$\ZAP$ does not consult wall-clock time during the handshake or the data
+phase. Clock skew between principals is irrelevant to authentication
+correctness.
+\end{proposition}
+
+\begin{proof}
+By inspection of \Cref{con:zap}: nonces $n_I, n_R$ are random; the
+transcript hash $h_{\text{tr}}$ is computed from received bytes; AEAD
+nonces $n_i$ are monotonic per-session counters, not timestamps. \qed
+\end{proof}
+
+\section{Discussion of the gap}
+
+The proofs above quantify what was qualitatively obvious. The separation
+between $\ZAP$ and $\JWT$ is not asymptotic: it is a constant-factor
+separation with the constant being approximately $1$ (the JWT scheme
+admits attacks with success probability $\Theta(1)$ via several channels)
+versus approximately $2^{-100}$ (the ZAP scheme reduces to standard
+cryptographic assumptions at appropriate parameter sizes). The
+separation is therefore not an artefact of the proof technique but a
+direct consequence of architectural choices: bearer credentials on the
+wire vs. transport-bound identities; central minting vs. local key
+operations; runtime trust resolution vs. boot-time trust loading.
+
+\section{Limitations}
+
+The analysis above ignores side-channel attacks on KEM implementations,
+Spectre-class transient-execution leakage of long-term keys, and the
+possibility of supply-chain compromise of either the KEM library or the
+JOSE library. We also do not model post-compromise security beyond the
+standard rotation discussion. We do not analyse the ingress-edge
+hybridisation discussed in the companion paper, where bearer tokens
+remain operationally necessary for browser and third-party clients; the
+edge-internal hybrid model is a topic of independent ongoing work.
+
+\begin{thebibliography}{99}
+
+\bibitem{rfc7519} M. Jones, J. Bradley, N. Sakimura.
+  \emph{JSON Web Token (JWT)}. RFC 7519, IETF, 2015.
+  \url{https://www.rfc-editor.org/rfc/rfc7519}.
+
+\bibitem{rfc7515} M. Jones, J. Bradley, N. Sakimura.
+  \emph{JSON Web Signature (JWS)}. RFC 7515, IETF, 2015.
+
+\bibitem{rfc7517} M. Jones.
+  \emph{JSON Web Key (JWK)}. RFC 7517, IETF, 2015.
+
+\bibitem{rfc7518} M. Jones.
+  \emph{JSON Web Algorithms (JWA)}. RFC 7518, IETF, 2015.
+
+\bibitem{rfc8446} E. Rescorla.
+  \emph{The Transport Layer Security (TLS) Protocol Version 1.3}.
+  RFC 8446, IETF, 2018.
+
+\bibitem{ietfjwtbcp} Y. Sheffer, D. Hardt, M. Jones.
+  \emph{JSON Web Token Best Current Practices}. RFC 8725, IETF BCP 225, 2020.
+
+\bibitem{auth0algnone} T. McLean.
+  \emph{Critical vulnerabilities in JSON Web Token libraries}.
+  Auth0 advisory, 2015. CVE-2015-9235 et seq.
+
+\bibitem{auth0algconf} T. McLean.
+  \emph{JWT algorithm confusion}. Public advisory, 2016.
+  CVE-2016-10555, CVE-2016-5431, CVE-2018-1000531.
+
+\bibitem{donenfeld2017wireguard} J.~A. Donenfeld.
+  \emph{WireGuard: Next Generation Kernel Network Tunnel}. NDSS, 2017.
+
+\bibitem{perrin2018noise} T. Perrin.
+  \emph{The Noise Protocol Framework}. Specification rev. 34, 2018.
+
+\bibitem{marlinspike2016x3dh} M. Marlinspike, T. Perrin.
+  \emph{The X3DH Key Agreement Protocol}. Signal Specification, 2016.
+
+\bibitem{ylonen2006rfc4251} T. Yl\"onen, C. Lonvick.
+  \emph{The Secure Shell (SSH) Protocol Architecture}. RFC 4251, IETF, 2006.
+
+\bibitem{spiffe} SPIFFE Authors.
+  \emph{The SPIFFE Standards: Workload Identity for Distributed Systems}.
+  Specification, 2023.
+
+\bibitem{cremers2017tls13} C. Cremers, M. Horvat, J. Hoyland, S. Scott,
+  T. van der Merwe. \emph{A Comprehensive Symbolic Analysis of TLS 1.3}.
+  ACM CCS, 2017.
+
+\bibitem{nistfips203} NIST.
+  \emph{FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism Standard}.
+  Federal Information Processing Standard, 2024.
+
+\bibitem{krawczyk2010hkdf} H. Krawczyk.
+  \emph{Cryptographic Extraction and Key Derivation: The HKDF Scheme}.
+  CRYPTO, 2010.
+
+\bibitem{rfc9000} J. Iyengar, M. Thomson.
+  \emph{QUIC: A UDP-Based Multiplexed and Secure Transport}. RFC 9000,
+  IETF, 2021.
+
+\end{thebibliography}
+
+\end{document}

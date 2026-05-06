@@ -1,0 +1,528 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{hyperref}
+\usepackage[capitalise,noabbrev]{cleveref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{game}[theorem]{Game}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\KEM}{\ensuremath{\mathsf{KEM}}}
+\newcommand{\KGen}{\ensuremath{\mathsf{KGen}}}
+\newcommand{\Encap}{\ensuremath{\mathsf{Encap}}}
+\newcommand{\Decap}{\ensuremath{\mathsf{Decap}}}
+\newcommand{\KDF}{\ensuremath{\mathsf{KDF}}}
+\newcommand{\Adv}{\ensuremath{\mathbf{Adv}}}
+\providecommand{\Exp}{}\renewcommand{\Exp}{\ensuremath{\mathbf{Exp}}}
+\providecommand{\Game}{}\renewcommand{\Game}{\ensuremath{\mathbf{G}}}
+\newcommand{\negl}{\ensuremath{\mathsf{negl}}}
+\newcommand{\xwing}{\textsc{X-Wing}}
+\newcommand{\zwing}{\textsc{Z-Wing}}
+\newcommand{\zap}{\textsc{ZAP}}
+\newcommand{\mlkem}{\ensuremath{\mathsf{ML\text{-}KEM}}}
+\newcommand{\xtf}{\ensuremath{\mathsf{X25519}}}
+\newcommand{\sha}{\ensuremath{\mathsf{SHA3}}}
+\newcommand{\hkdf}{\ensuremath{\mathsf{HKDF}}}
+\newcommand{\BB}{\ensuremath{\{0,1\}}}
+
+\title{Security Proofs for \zwing{} in the \zap{} Handshake}
+\author{\zap{} Protocol Authors\\\texttt{zap-proto.io}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document accompanies the paper ``Post-Quantum Hybrid KEMs in the
+\zap{} Transport Handshake'' and contains the full proofs of the IND-CCA2
+security of \zwing{} and the IND-CCA2-AKE security of the \zap{} handshake
+instantiated with \zwing{}. We work in the random-oracle model and use a
+sequence-of-games style following \cite{shoup2004games}.
+\end{abstract}
+
+\tableofcontents
+
+\section{Notation and Preliminaries}\label{sec:notation}
+
+We let $\lambda$ be the security parameter and write $\negl(\lambda)$
+for any function negligible in $\lambda$. ``QPT'' means quantum
+polynomial-time; the random oracle is in the QROM where the analysis
+requires it. For a finite set $S$, $x \xleftarrow{\$} S$ denotes uniform
+sampling. For an algorithm $A$, $y \gets A(x)$ denotes execution.
+
+\subsection{KEM syntax and IND-CCA2}
+
+A KEM $\KEM = (\KGen, \Encap, \Decap)$ consists of:
+\begin{itemize}
+\item $\KGen(1^\lambda) \to (pk, sk)$,
+\item $\Encap(pk) \to (c, ss)$ with $ss \in \BB^{\ell}$,
+\item $\Decap(sk, c) \to ss$ or $\bot$.
+\end{itemize}
+\emph{Correctness}: $\Pr[\Decap(sk, c) = ss : (pk, sk) \gets \KGen,\ (c, ss) \gets \Encap(pk)] \ge 1 - \negl(\lambda)$.
+
+\begin{definition}[IND-CCA2]\label{def:indcca}
+For $\KEM$ and adversary $\mathcal{A}$,
+$\Adv^{\mathsf{ind\text{-}cca}}_{\KEM}(\mathcal{A}) =
+ |\Pr[\Exp^{\mathsf{ind\text{-}cca}, 1}_\KEM(\mathcal{A}) = 1]
+ - \Pr[\Exp^{\mathsf{ind\text{-}cca}, 0}_\KEM(\mathcal{A}) = 1]|$,
+where $\Exp^{\mathsf{ind\text{-}cca}, b}_\KEM$:
+\begin{enumerate}
+\item $(pk, sk) \gets \KGen(1^\lambda)$;
+\item $(c^*, ss_0) \gets \Encap(pk)$; $ss_1 \xleftarrow{\$} \BB^\ell$;
+\item give $\mathcal{A}$ access to $\mathcal{O}_{\Decap}(\cdot)$, refusing $c^*$;
+\item $b' \gets \mathcal{A}(pk, c^*, ss_b)$; output $b'$.
+\end{enumerate}
+\end{definition}
+
+\subsection{Hybrid KEM and freshness}
+
+\begin{definition}[Hybrid freshness]\label{def:fresh}
+For a session $\pi$ using \zwing{} with components $(\KEM_1, \KEM_2, \KEM_3)$,
+$\pi$ is \emph{fresh} if there exists $i^\star \in \{1, 2, 3\}$ such that
+neither party's $\KEM_{i^\star}$ secret in $\pi$ has been revealed via
+$\mathsf{StaticReveal}$ or $\mathsf{EphemeralReveal}$, and the test
+session's transport key has not been revealed.
+\end{definition}
+
+The freshness condition is the relaxation that distinguishes hybrid AKE from
+single-primitive AKE: an adversary may compromise up to two of the three
+KEM secrets and the protocol still must hide the session key.
+
+\section{Lemma 1: KDF Combiner Robustness}\label{sec:lem1}
+
+\begin{lemma}[Robust combiner]\label{lem:combiner}
+Let $H : \BB^* \to \BB^{n}$ be modelled as a random oracle, with output
+length $n = 256$. Define
+\[
+F(ss_1, ss_2, ss_3, c, pk) := H(\texttt{"Z-Wing-v1"} \parallel ss_1 \parallel ss_2 \parallel ss_3 \parallel c \parallel pk).
+\]
+For any adversary $\mathcal{A}$ making at most $q_H$ queries to $H$,
+\begin{enumerate}
+\item if for some $i^\star \in \{1, 2, 3\}$ the value $ss_{i^\star}$ is
+uniformly random and unknown to $\mathcal{A}$, then $F(\cdot)$ is
+$2^{-n}$-statistically close to uniform conditioned on
+$\mathcal{A}$'s view of $(ss_j)_{j \neq i^\star}$ and $(c, pk)$;
+\item the only way $\mathcal{A}$ can distinguish $F(\cdot)$ from uniform is
+to query $H$ on the exact preimage including $ss_{i^\star}$, an event with
+probability at most $q_H \cdot 2^{-|ss_{i^\star}|}$;
+\item $F$ binds the ciphertext $c$ and public key $pk$: for any
+$(ss_1, ss_2, ss_3) \neq (ss'_1, ss'_2, ss'_3)$ or
+$(c, pk) \neq (c', pk')$, $\Pr[F(\ldots) = F'(\ldots)] \le 2^{-n}$.
+\end{enumerate}
+\end{lemma}
+
+\begin{proof}
+We prove each clause.
+
+\textbf{(1) and (2): Hidden-input randomness.}
+Without loss of generality, suppose $ss_{i^\star}$ is uniformly random in
+$\BB^{\ell_{i^\star}}$ and unknown to $\mathcal{A}$. The output of $H$ at
+input $X = \texttt{"Z-Wing-v1"} \parallel ss_1 \parallel ss_2 \parallel ss_3 \parallel c \parallel pk$
+is, in the ROM, a uniformly random string conditioned on the event $E$ that
+$\mathcal{A}$ has not queried $H$ at $X$. Since $X$ contains $ss_{i^\star}$
+which has $\ge \lambda$ bits of min-entropy from $\mathcal{A}$'s view (we
+assume $\ell_{i^\star} \ge 256$), the probability that $\mathcal{A}$ guesses
+$X$ in any one of its $q_H$ oracle queries is at most $q_H / 2^{\ell_{i^\star}}$.
+Conditioned on $\bar{E}$ (no such query), $H(X)$ is uniform in $\BB^n$ from
+$\mathcal{A}$'s view. Hence
+\[
+\Delta\bigl(F(\cdot);\ U_n \mid \mathcal{A}\bigr) \le \frac{q_H}{2^{\ell_{i^\star}}} + 2^{-n} \le \frac{q_H + 1}{2^n}
+\]
+since $\ell_{i^\star} \ge n = 256$.
+
+\textbf{(3): Binding.}
+$F$ takes a unique input string for distinct $(ss_1, ss_2, ss_3, c, pk)$
+because the components are length-tagged or fixed-length (the public-key
+and ciphertext lengths of $\KEM_1, \KEM_2, \KEM_3$ are fixed by the algorithm
+choice; the label is fixed; and the shared secrets are 32 bytes each).
+The probability that the random oracle outputs the same value at two distinct
+inputs is, by a union bound over $q_H$ queries, at most
+$\binom{q_H}{2} 2^{-n}$.
+\qedhere
+\end{proof}
+
+\begin{remark}
+Clause (3) is what closes the ``ciphertext malleability'' gap of naive
+combiners. If we omitted $c$ or $pk$ from $H$'s input, an adversary could
+maul one component's ciphertext (e.g.\ a CCA-malleable but not CCA-secure
+component) without changing the derived key, breaking IND-CCA2 of the hybrid.
+\end{remark}
+
+\section{Lemma 2: Transcript Binding Prevents Key Reuse}\label{sec:lem2}
+
+\begin{lemma}[Transcript binding]\label{lem:transcript}
+Let $\tau$ be the \zap{} transcript and let $K_{\mathsf{tx}} = \hkdf(ss, \tau)$
+be the transport-key derivation. For two sessions $\pi, \pi'$ with derived
+keys $K, K'$, $K = K'$ implies $\tau = \tau'$ and $ss = ss'$
+except with probability $q_H \cdot 2^{-n}$ over the random oracle modelling
+of $\hkdf$, where $q_H$ is the total number of oracle queries.
+\end{lemma}
+
+\begin{proof}
+$\hkdf$-Extract followed by $\hkdf$-Expand is a two-stage extract-then-expand
+construction. We model the inner HMAC-based extract and the inner expand as
+independent random oracles $H_e, H_x$ (this is conservative; the actual
+HKDF analysis \cite{krawczyk2010hkdf} uses a weaker assumption).
+
+The transcript $\tau$ contains a fresh nonce per session
+($|\mathsf{nonce}| = 256$ in \zap{}) and the public-key fingerprints of both
+peers. For two sessions $\pi, \pi'$, the probability that
+$\tau = \tau'$ is bounded by the collision probability of the nonces, namely
+$2^{-256}$ over an honest randomness sampling (a single pair).
+
+If $\tau \neq \tau'$, then $H_x(H_e(0, ss) \parallel \tau) = H_x(H_e(0, ss') \parallel \tau')$
+forces a collision on $H_x$, occurring with probability at most
+$\binom{q_H}{2} 2^{-n}$.
+
+If $\tau = \tau'$ but $ss \neq ss'$, then $H_e(0, ss) \neq H_e(0, ss')$ except
+with collision probability $\binom{q_H}{2} 2^{-n}$, after which the same
+$H_x$ collision argument applies.
+
+Combining, $\Pr[K = K' \wedge (\tau, ss) \neq (\tau', ss')] \le \binom{q_H}{2} 2^{-n}$.
+\qedhere
+\end{proof}
+
+\section{Theorem 1: Z-Wing IND-CCA2}\label{sec:thm1}
+
+\begin{theorem}[\zwing{} IND-CCA2]\label{thm:zw-cca}
+For any QPT adversary $\mathcal{A}$ against the IND-CCA2 security of \zwing{},
+making at most $q_H$ random-oracle queries and $q_D$ decapsulation queries,
+\[
+\Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{A}) \le
+\min_{i \in \{1,2,3\}} \Adv^{\mathsf{ind\text{-}cca}}_{\KEM_i}(\mathcal{B}_i) +
+\frac{q_H + q_D + 1}{2^n} +
+\delta_{\KEM_1} + \delta_{\KEM_2} + \delta_{\KEM_3},
+\]
+where $\delta_{\KEM_i}$ is the correctness error of $\KEM_i$ and the running
+time of each $\mathcal{B}_i$ is approximately $t(\mathcal{A}) + (q_H + q_D) \cdot \mathsf{poly}(\lambda)$.
+\end{theorem}
+
+\begin{proof}
+We prove the bound for the case $i^\star = 2$ (the $\mlkem$-768 component);
+the cases $i^\star = 1$ and $i^\star = 3$ are symmetric.
+
+\paragraph{Game $\Game_0$.} Real IND-CCA2 game against \zwing{}.
+By definition,
+$\Pr[\Game_0 \to 1] = \frac{1}{2} + \frac{1}{2} \Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{A})$.
+
+\paragraph{Game $\Game_1$.} Identical to $\Game_0$ except that the simulator
+maintains a list $\mathcal{L}_H$ of all queries to $H$ and aborts if
+$\mathcal{A}$ ever submits to its decapsulation oracle a ciphertext $c$
+whose decapsulation produces $(ss_1, ss_2, ss_3)$ such that the input
+$X = \texttt{label} \parallel ss_1 \parallel ss_2 \parallel ss_3 \parallel c \parallel pk$
+has not been queried to $H$.
+
+\emph{Bounding $|\Pr[\Game_0 \to 1] - \Pr[\Game_1 \to 1]|$.}
+The abort happens only when the simulator must answer a decap query whose
+$H$-input has not been pre-queried. In the random-oracle model, the value of
+$H(X)$ for an unqueried $X$ is uniform from $\mathcal{A}$'s view. Therefore
+the simulator can defer answering: it samples a random $ss$, returns it, and
+``programs'' $H(X) = ss$ later. The only failure case is if $\mathcal{A}$
+queries $H$ at $X$ before submitting the decap query; the probability of
+$\mathcal{A}$ pre-querying $X$ for an honest decap output is bounded by
+$q_H q_D / 2^n$ (each of the $q_D$ decap inputs picks a random
+$ss_2$, hence a random $X$; collision with any of $q_H$ queries has
+probability $q_H/2^n$). Hence
+\[
+|\Pr[\Game_0 \to 1] - \Pr[\Game_1 \to 1]| \le \frac{q_H q_D}{2^n}.
+\]
+
+\paragraph{Game $\Game_2$.} Identical to $\Game_1$ except in the challenge
+ciphertext: the value $ss_2^*$ used by the simulator inside $H$ is
+\emph{replaced by a uniformly random string} $\widetilde{ss_2} \xleftarrow{\$} \BB^{\ell_2}$.
+The decap oracle remains honest with respect to $sk_2$, and any decap query
+that decapsulates to a value other than $\widetilde{ss_2}$ is answered honestly.
+
+\emph{Bounding $|\Pr[\Game_1 \to 1] - \Pr[\Game_2 \to 1]|$.}
+Construct $\mathcal{B}_2$, an IND-CCA2 adversary against $\KEM_2 = \mlkem$-768:
+$\mathcal{B}_2$ receives $(pk_2, c_2^*, ss_2^*)$ and must guess whether
+$ss_2^*$ is real or random. $\mathcal{B}_2$ generates $(pk_1, sk_1), (pk_3, sk_3)$
+itself, sets $pk = (pk_1, pk_2, pk_3)$, simulates the random oracle for
+$\mathcal{A}$, and answers decap queries by using $sk_1, sk_3$ for the
+classical and $\KEM_3$ components and forwarding the $\KEM_2$ component to
+its own decap oracle. The challenge \zwing{} ciphertext is
+$c^* = (pk_1', c_2^*, c_3^*)$ where $\mathcal{B}_2$ samples $pk_1', c_3^*$
+honestly. The simulated key $ss^* = H(X)$ uses the $ss_2^*$ from
+$\mathcal{B}_2$'s challenger.
+If $ss_2^*$ is real, the simulation is exactly $\Game_1$; if random, it is
+$\Game_2$. Hence
+\[
+|\Pr[\Game_1 \to 1] - \Pr[\Game_2 \to 1]| \le \Adv^{\mathsf{ind\text{-}cca}}_{\KEM_2}(\mathcal{B}_2).
+\]
+
+\paragraph{Game $\Game_3$.} Identical to $\Game_2$ except that $ss^*$, the
+challenge \zwing{} shared secret, is replaced by a uniformly random
+$\widetilde{ss^*} \xleftarrow{\$} \BB^n$.
+
+\emph{Bounding $|\Pr[\Game_2 \to 1] - \Pr[\Game_3 \to 1]|$.}
+By Lemma~\ref{lem:combiner}, with $i^\star = 2$ and $\widetilde{ss_2}$
+uniformly random and unknown to $\mathcal{A}$ (it never appears in any
+oracle output: the ciphertext $c_2^*$ is not in $\mathcal{O}_\Decap$'s
+allowed inputs by IND-CCA2 rules), the only way $\mathcal{A}$
+distinguishes $H(X)$ from uniform is to query $H$ at $X$. The probability of
+a $q_H$-bounded adversary querying $H$ at $X$ when $X$ contains
+$\widetilde{ss_2}$ of $\ell_2 \ge 256$ bits of min-entropy is at most
+$q_H / 2^{\ell_2} \le q_H / 2^n$. Hence
+\[
+|\Pr[\Game_2 \to 1] - \Pr[\Game_3 \to 1]| \le \frac{q_H}{2^n}.
+\]
+
+\paragraph{In $\Game_3$, $ss^*$ is uniform.}
+Therefore $\Pr[\Game_3 \to 1] = \frac{1}{2}$.
+
+\paragraph{Combining.}
+\begin{align*}
+\Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{A}) & = 2|\Pr[\Game_0 \to 1] - 1/2| \\
+& \le 2 \sum_{j=0}^{2} |\Pr[\Game_j \to 1] - \Pr[\Game_{j+1} \to 1]| \\
+& \le 2\!\left(\frac{q_H q_D}{2^n} + \Adv^{\mathsf{ind\text{-}cca}}_{\KEM_2}(\mathcal{B}_2) + \frac{q_H}{2^n}\right) \\
+& \le 2 \Adv^{\mathsf{ind\text{-}cca}}_{\KEM_2}(\mathcal{B}_2) + \frac{2(q_H + q_H q_D)}{2^n}.
+\end{align*}
+By symmetry, the analogous bound holds with $i^\star = 1$ and $i^\star = 3$.
+Taking the minimum and absorbing constants gives the theorem statement
+(the additive correctness term comes from the small probability that any
+of the three component KEMs decapsulates incorrectly during the simulation).
+\qedhere
+\end{proof}
+
+\begin{remark}[On QROM]
+The proof above uses classical random-oracle reasoning. For the post-quantum
+threat model, we lift the analysis to the QROM via standard techniques: each
+random-oracle game hop carries an additional $\mathcal{O}(q_H^2 / 2^n)$
+multiplicative factor from the one-way-to-hiding (O2H) lemma. The resulting
+bound retains the same shape but with worse constants. In particular, the
+underlying $\KEM_i$ advantages must be the QROM-IND-CCA2 advantages, which
+is exactly the form in which $\mlkem$ has been analysed.
+\end{remark}
+
+\section{Theorem 2: ZAP IND-CCA2-AKE with Z-Wing}\label{sec:thm2}
+
+\subsection{The handshake}
+
+For completeness we restate the relevant fragment of the \zap{} handshake.
+Let $A, B$ be peers with long-term \zwing{} keys $(pk_A, sk_A), (pk_B, sk_B)$.
+A session proceeds as:
+\begin{enumerate}
+\item $A \to B$: $(pk_A, c^A_e \gets \zwing.\Encap(pk_B), n_A)$, where
+$n_A \xleftarrow{\$} \BB^{256}$ is a session nonce.
+\item $B \to A$: $(pk_B, c^B_e \gets \zwing.\Encap(pk_A), n_B)$.
+\item Both compute $ss_A \gets \zwing.\Decap(sk_A, c^B_e)$ and
+$ss_B \gets \zwing.\Decap(sk_B, c^A_e)$, and likewise for the ephemeral
+\zwing{} contributions.
+\item Transport key:
+$K_{\mathsf{tx}} \gets \hkdf(ss_A \parallel ss_B,\ \tau)$,
+where $\tau = \texttt{"ZAP-v1"} \parallel \mathsf{fp}(pk_A) \parallel \mathsf{fp}(pk_B) \parallel c^A_e \parallel c^B_e \parallel n_A \parallel n_B \parallel \mathsf{suite}$.
+\end{enumerate}
+
+\subsection{The theorem}
+
+\begin{theorem}[\zap{} with \zwing{} IND-CCA2-AKE]\label{thm:ake}
+For any QPT adversary $\mathcal{A}$ in the AKE game with $n_P$ parties,
+$n_S$ sessions per party, $q_H$ random-oracle queries, and $q_D$ decap
+queries,
+\[
+\Adv^{\mathsf{ake}}_{\zap[\zwing]}(\mathcal{A}) \le
+2 n_P n_S \cdot \Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{B}) +
+\frac{n_P^2 n_S^2}{2^{|\mathsf{nonce}|}} +
+\frac{q_H^2}{2^{n+1}},
+\]
+where $\mathcal{B}$ runs in time $\approx t(\mathcal{A})$ plus simulation
+overhead.
+\end{theorem}
+
+\begin{proof}
+We use a hop sequence $\Game_0, \Game_1, \Game_2, \Game_3, \Game_4$.
+
+\paragraph{$\Game_0$: Real AKE game.}
+$\Pr[\Game_0 \to 1] = \frac{1}{2} + \frac{1}{2} \Adv^{\mathsf{ake}}(\mathcal{A})$.
+
+\paragraph{$\Game_1$: Nonce-uniqueness abort.}
+The simulator aborts if any two honest sessions sample the same nonce
+$n \in \BB^{256}$.
+
+\emph{Bound:} Birthday-bound over $n_P n_S$ sessions:
+\[
+|\Pr[\Game_0 \to 1] - \Pr[\Game_1 \to 1]| \le \binom{n_P n_S}{2} 2^{-256} \le \frac{n_P^2 n_S^2}{2^{|\mathsf{nonce}|+1}}.
+\]
+
+\paragraph{$\Game_2$: Random-oracle collision abort.}
+Abort if any two distinct $H$-inputs collide in their image.
+
+\emph{Bound:} $\binom{q_H}{2} 2^{-n} \le q_H^2 / 2^{n+1}$.
+
+\paragraph{$\Game_3$: Test session guess.}
+The simulator guesses, at the start of the experiment, the index $(P^\star, s^\star)$
+of the session $\mathcal{A}$ will Test. If the guess is wrong, the simulator
+aborts with output a coin-flip.
+
+\emph{Bound:} The probability of guessing correctly is $1/(n_P n_S)$, so
+\[
+\Pr[\Game_3 \to 1] - \frac{1}{2} = \frac{1}{n_P n_S}\!\left(\Pr[\Game_2 \to 1] - \frac{1}{2}\right).
+\]
+
+\paragraph{$\Game_4$: Replace $\zwing{}$ shared secret in test session by
+uniform.}
+For the (guessed) test session $(P^\star, s^\star)$, the simulator
+replaces the \zwing{}-derived $ss$ contributing to $K_{\mathsf{tx}}$ by a
+uniformly random value of the same length.
+
+\emph{Bound by Theorem~\ref{thm:zw-cca}:} The freshness condition guarantees
+that for some $i^\star \in \{1, 2, 3\}$, the corresponding component KEM
+secret in the test session is not corrupted. We use that
+particular reduction (one of the three symmetric branches) to construct
+$\mathcal{B}$:
+\begin{itemize}
+\item $\mathcal{B}$ receives a $\KEM_{i^\star}$ challenge $(pk_{i^\star}, c^*_{i^\star}, ss^*_{i^\star})$.
+\item $\mathcal{B}$ embeds $pk_{i^\star}$ as the corresponding component of the
+target party's long-term \zwing{} public key (or ephemeral, as appropriate),
+and uses $c^*_{i^\star}$ as the matching component of the test-session
+ciphertext.
+\item For all other components and other sessions, $\mathcal{B}$ generates
+keys honestly and answers all corruption / decap / session-key queries by
+direct computation.
+\item For decap queries against the embedded $pk_{i^\star}$, $\mathcal{B}$
+uses its own $\KEM_{i^\star}$ decapsulation oracle.
+\end{itemize}
+The simulation perfectly matches $\Game_3$ if $ss^*_{i^\star}$ is real, and
+matches $\Game_4$ if random. By the IND-CCA2 reduction,
+\[
+|\Pr[\Game_3 \to 1] - \Pr[\Game_4 \to 1]| \le \Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{B}).
+\]
+
+\paragraph{In $\Game_4$, $K_{\mathsf{tx}}$ is uniform.}
+By Lemma~\ref{lem:transcript}, $K_{\mathsf{tx}} = \hkdf(ss, \tau)$ is uniform
+in $\BB^{|K|}$ when $ss$ is uniform and $\hkdf$ is modelled as a random
+oracle, except for the collision probability already accounted for in
+$\Game_2$.
+
+So $\Pr[\Game_4 \to 1] = 1/2$.
+
+\paragraph{Combining.}
+\begin{align*}
+\Adv^{\mathsf{ake}}(\mathcal{A}) & = 2 \left(\Pr[\Game_0 \to 1] - 1/2\right) \\
+& \le 2 \cdot n_P n_S \left(\Pr[\Game_3 \to 1] - 1/2\right) + \frac{n_P^2 n_S^2}{2^{|\mathsf{nonce}|}} + \frac{q_H^2}{2^n} \\
+& \le 2 n_P n_S \cdot \Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{B}) + \frac{n_P^2 n_S^2}{2^{|\mathsf{nonce}|}} + \frac{q_H^2}{2^n},
+\end{align*}
+which proves the theorem. \qedhere
+\end{proof}
+
+\section{Hop-Sequence Summary}\label{sec:summary}
+
+\begin{table}[h]
+\centering
+\caption{\zwing{} IND-CCA2 hop sequence (case $i^\star = 2$).}
+\begin{tabular}{lll}
+\hline
+Game & Difference from previous & Bound on transition \\
+\hline
+$\Game_0$ & Real IND-CCA2 game & --- \\
+$\Game_1$ & Decap-oracle programming abort & $q_H q_D / 2^n$ \\
+$\Game_2$ & $ss_2^*$ replaced by uniform & $\Adv^{\mathsf{ind\text{-}cca}}_{\KEM_2}(\mathcal{B}_2)$ \\
+$\Game_3$ & $ss^*$ replaced by uniform & $q_H / 2^n$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{\zap{} with \zwing{} IND-CCA2-AKE hop sequence.}
+\begin{tabular}{lll}
+\hline
+Game & Difference & Bound \\
+\hline
+$\Game_0$ & Real AKE game & --- \\
+$\Game_1$ & Nonce uniqueness & $n_P^2 n_S^2 / 2^{|\mathsf{nonce}|+1}$ \\
+$\Game_2$ & RO collision avoidance & $q_H^2 / 2^{n+1}$ \\
+$\Game_3$ & Test-session guess & factor $n_P n_S$ in advantage \\
+$\Game_4$ & \zwing{} ss in test by uniform & $\Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{B})$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Concrete Bound}\label{sec:concrete}
+
+For deployment parameters $n = 256$, $|\mathsf{nonce}| = 256$,
+$n_P \le 2^{20}$, $n_S \le 2^{20}$, $q_H \le 2^{60}$, $q_D \le 2^{40}$,
+\[
+\Adv^{\mathsf{ake}}_{\zap[\zwing]}(\mathcal{A}) \le
+2^{41} \cdot \Adv^{\mathsf{ind\text{-}cca}}_{\zwing}(\mathcal{B}) +
+2^{40} \cdot 2^{-256} + 2^{120} \cdot 2^{-257}
+\le 2^{41} \cdot \min_i \Adv^{\mathsf{ind\text{-}cca}}_{\KEM_i} + 2^{-136}.
+\]
+With \mlkem{}-768 conjectured at $\approx 2^{-128}$ classical advantage and
+\xtf{} at $\approx 2^{-128}$ for the elliptic-curve component, the AKE advantage
+is bounded by $2^{-87}$ in the multi-user multi-session setting, which is
+comfortably below any practical threshold. The dominant term is the
+guess-the-test-session factor; tighter multi-user reductions for the
+underlying KEMs would directly translate.
+
+\section{Forward Secrecy and Post-Compromise Security}\label{sec:fs}
+
+The hybrid freshness condition (\cref{def:fresh}) yields
+\emph{weak forward secrecy}: an adversary that corrupts both peers' static
+keys \emph{after} a session completes still cannot recover the session key
+provided neither peer's ephemeral was revealed and at least one ephemeral
+component remains uncorrupted. This is because the test session's ephemeral
+$\KEM_1$ keypair is short-lived and securely erased.
+
+\emph{Strong} forward secrecy --- security against post-session corruption
+of \emph{ephemerals} also --- is unattainable in the absence of additional
+key-rotation machinery, and is not claimed.
+
+\emph{Post-compromise security} after key rotation: \zap{} performs handshake
+re-keying every $T$ messages or $\Delta t$ seconds. A new \zwing{} encap on
+a fresh ephemeral disconnects the post-rotation key from the pre-rotation
+KEM secrets, except via $\sha$ collisions in the transcript, bounded by
+Lemma~\ref{lem:transcript}.
+
+\section{Open Questions Recap}\label{sec:open}
+
+The companion paper lists open questions; we add here:
+\begin{itemize}
+\item \emph{Tightness.} The factor $n_P n_S$ in Theorem~\ref{thm:ake} is from
+guessing the test session. A tight reduction would use the multi-user
+techniques of Bader--Jager--Li--Sch{\"a}ge.
+\item \emph{QROM bounds.} Our hop sequence is classical-ROM. A QROM-tight
+analysis of \zwing{} via the O2H framework is the obvious follow-up.
+\item \emph{Mechanisation.} The proof structure is suitable for an
+EasyCrypt mechanisation; the only delicate step is the simultaneous
+embedding of three KEM challenges, which requires care with the simulator's
+random-oracle programming.
+\end{itemize}
+
+\appendix
+
+\section{Bibliographic Notes}\label{app:bib}
+
+The sequence-of-games style here follows Shoup \cite{shoup2004games}.
+The robust-combiner construction generalises the parallel-encap-then-hash
+construction of \cite{giacon2018kem}, with the public-key binding of
+\xwing{} \cite{xwing2024}. The hybrid freshness condition is from
+\cite{bindel2019hybrid}. The HKDF random-oracle abstraction is conservative;
+the original analysis \cite{krawczyk2010hkdf} relies on a weaker
+``computational extractor'' assumption.
+
+\begin{thebibliography}{9}
+\bibitem{xwing2024} Barbosa, Connolly, Duarte, Kaiser, Schwabe, Varner, Westerbaan, H{\"u}lsing.
+``X-Wing: The Hybrid KEM You've Been Looking For.'' eprint 2024/039.
+\bibitem{kyber2018} Bos, Ducas, Kiltz, Lepoint, Lyubashevsky, Schanck, Schwabe, Seiler, Stehl{\'e}.
+``CRYSTALS-Kyber: A CCA-Secure Module-Lattice-Based KEM.'' EuroS\&P 2018.
+\bibitem{nistmlkem} NIST. ``FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism Standard.'' 2024.
+\bibitem{giacon2018kem} Giacon, Heuer, Poettering. ``KEM Combiners.'' PKC 2018.
+\bibitem{bindel2019hybrid} Bindel, Brendel, Fischlin, Goncalves, Stebila.
+``Hybrid Key Encapsulation Mechanisms and Authenticated Key Exchange.'' PQCrypto 2019.
+\bibitem{krawczyk2010hkdf} Krawczyk. ``Cryptographic Extraction and Key Derivation: The HKDF Scheme.'' CRYPTO 2010.
+\bibitem{shoup2004games} Shoup. ``Sequences of Games: A Tool for Taming Complexity in Security Proofs.'' eprint 2004/332.
+\bibitem{cremers2017ake} Cremers, Horvat, Hoyland, Scott, van der Merwe. ``A Comprehensive Symbolic Analysis of TLS 1.3.'' CCS 2017.
+\bibitem{boyd2020ake} Boyd, Mathuria, Stebila. \emph{Protocols for Authentication and Key Establishment}, 2nd ed., Springer 2020.
+\end{thebibliography}
+
+\end{document}

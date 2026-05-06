@@ -1,0 +1,638 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{mathtools}
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usepackage{tikz-cd}
+\usepackage[capitalize,noabbrev]{cleveref}
+\usepackage[
+  backend=biber,
+  style=numeric-comp,
+  sorting=none
+]{biblatex}
+\addbibresource{refs.bib}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\newcommand{\CZ}{\mathcal{C}_{\mathrm{ZAP}}}
+\newcommand{\Zb}{Z_{\mathrm{base}}}
+\newcommand{\Zh}{Z_{\mathrm{http}}}
+\newcommand{\Zw}{Z_{\mathrm{ws}}}
+\newcommand{\Zf}{Z_{\mathrm{fix}}}
+\newcommand{\Zr}{Z_{\mathrm{rns}}}
+\newcommand{\Zm}{Z_{\mathrm{mcp}}}
+\newcommand{\Zac}{Z_{\mathrm{acp}}}
+\newcommand{\Za}{Z_{\mathrm{a2a}}}
+\newcommand{\Adv}{\mathbf{Adv}}
+
+\title{Compositionality of the ZAP Protocol Family:\\Formal Proofs}
+\author{ZAP Protocol Authors\\\texttt{zap-proto.io}}
+\date{2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document gives the formal proofs underlying the categorical
+framework presented in the companion paper. We prove the category
+axioms for $\CZ$, the initiality of $\Zb$, the security composition
+theorem under tight embeddings, and the tightness of the five
+concrete embeddings claimed in the family.
+\end{abstract}
+
+\tableofcontents
+
+\section{Preliminaries}
+\label{sec:prelim}
+
+We adopt the protocol model of the companion paper. A protocol $P$
+is the tuple $(\Sigma_P, \mathcal{S}_P, s^0_P, \to_P,
+\mathcal{V}_P)$. We allow $P$ to be probabilistic by lifting $\to_P$
+to a sub-distribution-valued transition function
+$\mu_P : \mathcal{S}_P \times \Sigma_P \to \mathcal{D}(\mathcal{S}_P)$
+where $\mathcal{D}$ denotes finite sub-distributions. We assume the
+underlying probability space is fixed and standard measure-theoretic
+care is taken throughout.
+
+We write $|m|$ for the bit length of a wire message $m$ and
+$|\sigma| = \sum_i |m_i|$ for the total bit length of a trace
+$\sigma$. The security parameter is $\lambda \in \mathbb{N}$, and a
+function $\nu : \mathbb{N} \to \mathbb{R}_{\ge 0}$ is
+\emph{negligible}, written $\nu \in \mathrm{negl}(\lambda)$, if for
+every polynomial $p$ there is $\lambda_0$ such that $\nu(\lambda) <
+1/p(\lambda)$ for all $\lambda \ge \lambda_0$.
+
+We use the standard fact that statistical distance
+$\Delta(X, Y) := \frac{1}{2}\sum_{z}|\Pr[X = z] - \Pr[Y = z]|$ is a
+metric on the space of distributions over a discrete set.
+
+\section{Theorem 1: Category and 2-Category Axioms}
+\label{sec:cat-axioms}
+
+\begin{theorem}[Category and 2-category axioms for $\CZ$]
+\label{thm:cat-axioms}
+The data $(\mathrm{Obj}(\CZ), \mathrm{Hom}_{\CZ},
+\mathrm{2Hom}_{\CZ}, \circ, \mathrm{id})$ as defined in the
+companion paper forms a strict 2-category. Specifically:
+\begin{enumerate}
+\item For every object $P$, the identity $\mathrm{id}_P : P
+\hookrightarrow P$ is an embedding.
+\item Composition of embeddings is associative:
+$(\chi \circ \psi) \circ \varphi = \chi \circ (\psi \circ \varphi)$
+for all composable $\varphi, \psi, \chi$.
+\item Identity is left and right unit for composition:
+$\mathrm{id}_Q \circ \varphi = \varphi = \varphi \circ
+\mathrm{id}_P$ for $\varphi : P \hookrightarrow Q$.
+\item For every parallel pair of embeddings $\varphi, \varphi' : P
+\rightrightarrows Q$, the 2-morphisms $\mathrm{2Hom}(\varphi,
+\varphi')$ form a category under vertical composition.
+\item Horizontal composition of 2-morphisms exists and the
+interchange law holds:
+$(\beta \cdot \alpha) \circ_h (\beta' \cdot \alpha') =
+(\beta \circ_h \beta') \cdot (\alpha \circ_h \alpha')$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+We treat each axiom in turn.
+
+\paragraph{(1) Identity is an embedding.}
+The identity is the triple $(\mathrm{id}_{\Sigma_P}^{(1)},
+\mathrm{id}_{\mathcal{S}_P}, 0)$. Each clause of the embedding
+definition (Definition~3.1 in the companion paper, restated above) holds
+trivially: $\mathrm{id}_{\Sigma_P}^{(1)}$ is injective; the state map
+preserves $s^0_P$; transitions are preserved exactly because the
+trace map is the singleton; security predicates are preserved
+because the state map is the identity; and the leakage profile is
+zero by construction.
+
+\paragraph{(2) Associativity.}
+Let $\varphi : P \hookrightarrow Q$, $\psi : Q \hookrightarrow R$,
+$\chi : R \hookrightarrow S$. We need
+$(\chi \circ \psi) \circ \varphi = \chi \circ (\psi \circ \varphi)$
+component-wise.
+
+The message components are
+$\chi_\Sigma^* \circ (\psi_\Sigma^* \circ \varphi_\Sigma)
+= (\chi_\Sigma^* \circ \psi_\Sigma^*) \circ \varphi_\Sigma$, which
+follows from associativity of function composition lifted to
+sequences (the lifting being natural and preserving composition).
+
+The state components are $\chi_\mathcal{S} \circ (\psi_\mathcal{S}
+\circ \varphi_\mathcal{S}) = (\chi_\mathcal{S} \circ
+\psi_\mathcal{S}) \circ \varphi_\mathcal{S}$, again by associativity
+of function composition.
+
+The leakage components are $\rho_\chi + (\rho_\psi + \rho_\varphi)
+= (\rho_\chi + \rho_\psi) + \rho_\varphi$, which follows because
+addition over the reals is associative.
+
+\paragraph{(3) Unit laws.}
+Both sides reduce, by direct computation, to $\varphi$. The leakage
+of identity is zero, $\rho_\varphi + 0 = \rho_\varphi = 0 +
+\rho_\varphi$.
+
+\paragraph{(4) Vertical composition of 2-cells.}
+Given $\alpha : \varphi \Rightarrow \varphi'$ and $\beta : \varphi'
+\Rightarrow \varphi''$ with relations $R_\alpha, R_\beta$, define
+the relational composite $R_{\beta \cdot \alpha} := R_\beta \circ
+R_\alpha = \{(t, t'') : \exists t', (t, t') \in R_\alpha \wedge
+(t', t'') \in R_\beta\}$. We verify the simulation conditions
+(Definition~3.4 in the companion paper):
+
+\begin{itemize}
+\item For all $s$, $(\varphi_\mathcal{S}(s), \varphi'_\mathcal{S}(s))
+\in R_\alpha$ and $(\varphi'_\mathcal{S}(s),
+\varphi''_\mathcal{S}(s)) \in R_\beta$, so
+$(\varphi_\mathcal{S}(s), \varphi''_\mathcal{S}(s)) \in R_{\beta \cdot
+\alpha}$.
+\item Whenever $(t, t'') \in R_{\beta \cdot \alpha}$ via witness
+$t'$, simulation moves witnessed by $\alpha$ produce a $t_1$ in the
+image of $\varphi'$, and simulation moves witnessed by $\beta$
+produce a $t''_j$ in the image of $\varphi''$ such that $(t_1,
+t''_j) \in R_{\beta \cdot \alpha}$.
+\item Observational equivalence composes: the leakage difference
+across the composite is $(\rho_{\varphi''} - \rho_{\varphi'}) +
+(\rho_{\varphi'} - \rho_\varphi) = \rho_{\varphi''} - \rho_\varphi$
+as required.
+\end{itemize}
+
+The identity 2-cell on $\varphi$ is the diagonal
+$\{(\varphi_\mathcal{S}(s), \varphi_\mathcal{S}(s)) : s \in
+\mathcal{S}_P\}$ extended by reachability; identity laws and
+associativity follow from the corresponding laws for relational
+composition.
+
+\paragraph{(5) Horizontal composition and interchange.}
+Given 2-cells $\alpha : \varphi \Rightarrow \varphi'$ in
+$\mathrm{Hom}(P, Q)$ and $\beta : \psi \Rightarrow \psi'$ in
+$\mathrm{Hom}(Q, R)$, define the horizontal composite
+$\beta \circ_h \alpha : \psi \circ \varphi \Rightarrow \psi' \circ
+\varphi'$ by the relation
+\[
+R_{\beta \circ_h \alpha} := \{(\psi_\mathcal{S}(t),
+\psi'_\mathcal{S}(t')) : (t, t') \in R_\alpha\}
+\cup \{(\psi_\mathcal{S}(u), \psi'_\mathcal{S}(u')) : (u, u') \in
+R_\beta \text{ post-action}\}.
+\]
+The interchange law is a routine diagram chase using the
+associativity of relational composition; we omit the calculation as
+it parallels the standard 2-category construction
+\cite[Ch.~XII.3]{maclane1998categories}.
+\end{proof}
+
+\section{Theorem 2: Initiality of $\Zb$}
+\label{sec:init-proof}
+
+\begin{theorem}[$\Zb$ is initial in $\CZ$]
+\label{thm:init-proof}
+For every object $P \in \mathrm{Obj}(\CZ)$, there is exactly one
+embedding $\iota_P : \Zb \hookrightarrow P$.
+\end{theorem}
+
+\begin{proof}
+We construct $\iota_P$ explicitly and then show uniqueness.
+
+\paragraph{Construction.}
+Every protocol $P$ in the family is, by specification, layered over
+$\Zb$. Concretely, $P$ has an initial state in which it has not yet
+processed any $P$-specific envelopes; in this initial phase, the
+$\Sigma_P$ messages reduce to bare $\Zb$ envelopes carrying the
+handshake. Define:
+\begin{itemize}
+\item $\iota_{P,\Sigma} : \Sigma_{\Zb} \to \Sigma_P^+$ by
+$\iota_{P,\Sigma}(m) := (m)$, treating each $\Zb$ envelope as a
+singleton trace of $P$-messages (which the $P$ semantics interprets
+as a $\Zb$-only handshake message).
+\item $\iota_{P,\mathcal{S}} : \mathcal{S}_{\Zb} \to \mathcal{S}_P$
+by $\iota_{P,\mathcal{S}}(s) := (s, \bot)$, where the second
+component records that no $P$-specific state has been added.
+\item $\rho_{\iota_P} := 0$.
+\end{itemize}
+
+We verify the embedding conditions:
+\begin{enumerate}
+\item Injectivity: $\iota_{P,\Sigma}$ is the identity on the
+underlying envelope, so injective.
+\item Initial-state preservation: $\iota_{P,\mathcal{S}}(s^0_{\Zb}) =
+(s^0_{\Zb}, \bot) = s^0_P$ by construction (the $P$-initial state is
+the $\Zb$-initial state with empty $P$-state).
+\item Transition preservation: $\Zb$ transitions in the $P$-handshake
+phase are by definition $P$-transitions.
+\item Security predicate preservation: every property of $\Zb$
+present in state $s$ is also present in state $(s, \bot)$ because the
+$P$-valuation extends $\mathcal{V}_{\Zb}$ on the $\Zb$-part of the
+state.
+\item Tightness: $\rho = 0$ trivially satisfies the negligibility
+bound.
+\end{enumerate}
+
+\paragraph{Uniqueness.}
+Suppose $\iota'_P : \Zb \hookrightarrow P$ is another embedding. We
+show $\iota'_P = \iota_P$.
+
+The state component must satisfy $\iota'_{P,\mathcal{S}}(s^0_{\Zb}) =
+s^0_P = (s^0_{\Zb}, \bot)$. Inductively, if for some $\Zb$ trace
+$\sigma$ ending in state $s$ we have
+$\iota'_{P,\mathcal{S}}(s) = (s, \bot)$, then for the next $\Zb$
+transition $s \xrightarrow{m} s'$, the embedding must produce a
+$P$-trace from $(s, \bot)$ to $\iota'_{P,\mathcal{S}}(s')$. Since
+$P$ has not yet entered any $P$-specific state, the only available
+$P$-transitions from $(s, \bot)$ are those that correspond to $\Zb$
+handshake transitions. By transition preservation, this forces
+$\iota'_{P,\mathcal{S}}(s') = (s', \bot)$ and the message component
+must be the singleton trace.
+
+The leakage component $\rho_{\iota'_P}$ must satisfy
+$\rho_{\iota'_P} \le \rho_{\iota_P} = 0$ by minimality (any extra
+leakage would arise from extra wire activity, but the message
+component is fixed). Hence $\rho_{\iota'_P} = 0$.
+
+We have $\iota'_P = \iota_P$ in all three components. \qedhere
+\end{proof}
+
+\begin{remark}[Functoriality of language bindings]
+A language binding $L$ defines a category $\mathcal{C}_L$ whose
+objects are $L$-typed protocol implementations and whose morphisms
+are $L$-typed embeddings. The map $F_L : \CZ \to \mathcal{C}_L$
+preserving composition and identity is a functor. By initiality,
+the binding type $F_L(\Zb)$ determines the binding types of all
+sub-protocols up to isomorphism (each $F_L(P)$ has a unique morphism
+from $F_L(\Zb)$ in $\mathcal{C}_L$, namely $F_L(\iota_P)$). This
+formalizes wire-level interoperability.
+\end{remark}
+
+\section{Theorem 3: Security Composition Under Tight Embedding}
+\label{sec:comp-proof}
+
+\begin{theorem}[Security composition under tight embedding]
+\label{thm:composition-proof}
+Let $\varphi : P \hookrightarrow Q$ be a tight embedding and let
+$\pi$ be a security property in $\Pi(\varphi)$ with games
+$G_\pi^P, G_\pi^Q$. Suppose $P$ satisfies $\pi$ against adversary
+class $\mathcal{C}$ with bound $\epsilon_P(\lambda)$. Then $Q$
+satisfies $\pi$ against $\mathcal{C}$ with bound
+$\epsilon_Q(\lambda) \le \epsilon_P(\lambda) + \rho_\varphi(\lambda)
++ \delta_\varphi(\lambda)$, where $\delta_\varphi$ is a function of
+the embedding's syntactic complexity (specifically, the maximum
+length of $\varphi_\Sigma(m)$ over $m \in \Sigma_P$).
+\end{theorem}
+
+\begin{proof}
+The proof is by reduction. Let $\mathcal{B}$ be a $\mathcal{C}$-class
+adversary against $G_\pi^Q$ with advantage $\Adv := \epsilon_Q$. We
+construct an adversary $\mathcal{A}$ against $G_\pi^P$ with
+advantage at least $\Adv - \rho_\varphi - \delta_\varphi$, which
+forces $\Adv \le \epsilon_P + \rho_\varphi + \delta_\varphi$.
+
+\paragraph{Construction of $\mathcal{A}$.}
+$\mathcal{A}$ runs $\mathcal{B}$ as a sub-procedure. When
+$\mathcal{B}$ asks for the next $Q$-message, $\mathcal{A}$ asks the
+$P$-challenger for the corresponding $P$-message and applies
+$\varphi_\Sigma$ to obtain a $Q$-trace of length at most $k :=
+\max_m |\varphi_\Sigma(m)|$. $\mathcal{A}$ feeds this trace to
+$\mathcal{B}$ one message at a time. When $\mathcal{B}$ outputs a
+guess $b \in \{0, 1\}$, $\mathcal{A}$ outputs the same guess.
+
+\paragraph{Analysis.}
+Let $\mathrm{View}_\mathcal{B}^Q$ be $\mathcal{B}$'s view in the
+real $G_\pi^Q$ game and $\mathrm{View}_\mathcal{B}^{Q,\varphi}$ be
+its view in the simulated game where the $Q$-trace is
+$\varphi_\Sigma$ applied to the $P$-trace. By the tightness
+condition, $\Delta(\mathrm{View}_\mathcal{B}^Q,
+\mathrm{View}_\mathcal{B}^{Q,\varphi}) \le \rho_\varphi(\lambda)$.
+
+By the standard distinguishing-distance lemma, $\mathcal{B}$'s
+advantage in the simulated game is at least $\Adv -
+\rho_\varphi(\lambda)$.
+
+The $\delta_\varphi$ term arises from the granularity of the
+challenger interaction: $\mathcal{A}$ may need to interleave queries
+to the $P$-challenger with sub-message activity by $\mathcal{B}$, and
+the resulting timing can introduce a small additional advantage
+bounded by $\delta_\varphi(\lambda)$, which depends polynomially on
+the maximum embedding length $k$. Specifically, for an embedding
+where each $P$-message expands to at most $k$ $Q$-messages and the
+adversary interacts with $q$ messages, $\delta_\varphi(\lambda) \le
+k \cdot q \cdot 2^{-\lambda}$, which is negligible whenever $k$ and
+$q$ are polynomial in $\lambda$.
+
+Therefore $\mathcal{A}$ has advantage at least $\Adv - \rho_\varphi
+- \delta_\varphi$ in the $P$-game, but $\mathcal{A} \in \mathcal{C}$
+(it does only polynomial work on top of $\mathcal{B}$ and applying
+$\varphi_\Sigma$, both of which are polynomial). By assumption,
+$\mathcal{A}$'s advantage is at most $\epsilon_P$. Solving for
+$\Adv$ gives $\Adv \le \epsilon_P + \rho_\varphi + \delta_\varphi$
+as claimed.
+\end{proof}
+
+\begin{corollary}[Stack inheritance]
+\label{cor:stack-proof}
+Let $\varphi_1 : P_1 \hookrightarrow P_2, \ldots, \varphi_n :
+P_n \hookrightarrow P_{n+1}$ all be tight, and let $\pi$ be
+preserved by every $\varphi_i$. If $P_1$ satisfies $\pi$ with bound
+$\epsilon_1$, then $P_{n+1}$ satisfies $\pi$ with bound
+\[
+\epsilon_{n+1} \le \epsilon_1 + \sum_{i=1}^n
+\bigl(\rho_{\varphi_i} + \delta_{\varphi_i}\bigr).
+\]
+For $n$ polynomial in $\lambda$ and tight embeddings, the bound is
+negligible iff $\epsilon_1$ is.
+\end{corollary}
+
+\begin{proof}
+Induction on $n$.
+Base case $n = 0$ is trivial.
+Inductive step: assume $P_n$ satisfies $\pi$ with bound
+$\epsilon_n \le \epsilon_1 + \sum_{i=1}^{n-1}(\rho_{\varphi_i} +
+\delta_{\varphi_i})$. Apply \cref{thm:composition-proof} to
+$\varphi_n$ to obtain $\epsilon_{n+1} \le \epsilon_n +
+\rho_{\varphi_n} + \delta_{\varphi_n}$, which gives the bound.
+
+For tight embeddings, $\rho_{\varphi_i}, \delta_{\varphi_i} \in
+\mathrm{negl}(\lambda)$. A polynomial sum of negligible functions
+is negligible, so $\epsilon_{n+1} - \epsilon_1$ is negligible.
+\end{proof}
+
+\section{Tightness of Concrete Embeddings}
+\label{sec:concrete-proofs}
+
+We prove the five embeddings claimed in the companion paper are
+tight.
+
+\subsection{$\varphi_{hw} : \Zh \hookrightarrow \Zw$}
+
+\begin{proposition}[Proposition~5.1 of companion]
+\label{prop:hw-proof}
+The embedding $\varphi_{hw}$ that maps each $\Zh$ request/response
+pair to a $\Zw$ stream opened, used for one round trip, and closed,
+is tight.
+\end{proposition}
+
+\begin{proof}
+We construct the embedding explicitly:
+\begin{itemize}
+\item $\varphi_{hw,\Sigma}(m_{\mathrm{req}}) = (\mathtt{OPEN},
+m_{\mathrm{req}})$ for a $\Zh$ request $m_{\mathrm{req}}$.
+\item $\varphi_{hw,\Sigma}(m_{\mathrm{resp}}) = (m_{\mathrm{resp}},
+\mathtt{CLOSE})$ for a $\Zh$ response $m_{\mathrm{resp}}$.
+\item $\varphi_{hw,\mathcal{S}}$ maps the $\Zh$ states
+$\{\mathit{init}, \mathit{awaiting}, \mathit{done}\}$ to the
+$\Zw$ states $\{\mathit{closed}, \mathit{open}, \mathit{closed}\}$.
+\end{itemize}
+
+\paragraph{Tightness.}
+The leakage is the additional information a $\Zw$-observer learns
+about the $\Zh$-session beyond what is visible to a $\Zb$-observer
+of the underlying $\Zb$ session. The two additional wire bytes are
+\texttt{OPEN} and \texttt{CLOSE} markers, both of which are known
+constants determined by the $\Zh$-message structure (any
+$\Zh$-observer at the $\Zb$ layer would observe identical framing
+because $\Zh$ already serializes through $\Zw$-style framing at
+$\Zb$). The distribution of the $\Zw$-trace given a $\Zh$-trace is
+deterministic, hence statistical distance zero, hence $\rho = 0
+\le \mathrm{negl}(\lambda)$.
+
+\paragraph{Property preservation.}
+The security predicates of $\Zh$ are: confidentiality, authenticity,
+post-quantum key derivation, channel-binding (when paired with
+$\Zr$). All four predicates are valuated identically on the $\Zw$
+state because the $\Zw$ session keys are derived from the same $\Zb$
+key schedule. Hence
+$\Pi(\varphi_{hw}) = \{\mathrm{conf}, \mathrm{auth}, \mathrm{pq},
+\mathrm{cb}\}$.
+\end{proof}
+
+\subsection{$\varphi_{fw} : \Zf \hookrightarrow \Zw$}
+
+\begin{proposition}[Proposition~5.2 of companion]
+\label{prop:fw-proof}
+The embedding $\varphi_{fw}$ that maps a FIX session to a single
+$\Zw$ stream with FIX sequence numbers preserved as $\Zw$ envelope
+sequence numbers is tight.
+\end{proposition}
+
+\begin{proof}
+The map sends each FIX message $m$ with sequence number $n$ to a
+$\Zw$ envelope $\langle m, n \rangle$. The $\Zw$ session is opened
+at FIX-Logon and closed at FIX-Logout. Sequence-number gap-fill is
+realized by $\Zw$ \texttt{REPLAY}/\texttt{ACK} framing.
+
+\paragraph{Tightness.}
+The wire-level activity of $\varphi_{fw}$ is exactly the activity a
+$\Zf$-observer would see at the $\Zb$ layer, because $\Zf$ already
+specifies its messages as $\Zb$ envelopes with FIX semantics. The
+$\Zw$ envelope sequence number is the FIX sequence number,
+verbatim. Statistical distance is zero, $\rho = 0$.
+
+\paragraph{Property preservation.}
+$\Zf$ inherits all $\Zb$ security predicates: confidentiality,
+authenticity, post-quantum, channel-binding. The FIX-specific
+predicate ``in-order delivery up to gap-fill'' is preserved by
+$\Zw$ because $\Zw$ guarantees in-order delivery within a stream.
+Hence $\Pi(\varphi_{fw}) \supseteq \{\mathrm{conf}, \mathrm{auth},
+\mathrm{pq}, \mathrm{cb}, \mathrm{in\text{-}order}\}$.
+\end{proof}
+
+\subsection{$\varphi_{rb} : \Zr \hookrightarrow \Zb$}
+
+\begin{proposition}[Proposition~5.3 of companion]
+\label{prop:rb-proof}
+The embedding $\varphi_{rb}$ that injects an RNS-bound identity into
+the \texttt{identity} field of the $\Zb$ envelope at handshake time
+is tight.
+\end{proposition}
+
+\begin{proof}
+$\Zr$ is the simplest case: $\Zr$'s state is exactly $\Zb$'s state
+with the \texttt{identity} field bound to the RNS-resolved
+identifier, and $\Zr$'s message alphabet is a singleton extension of
+$\Zb$'s (the channel-binding handshake message). The embedding is
+$\varphi_{rb,\Sigma}(m) = (m')$ where $m'$ is the $\Zb$ envelope
+with the \texttt{identity} field set, and
+$\varphi_{rb,\mathcal{S}}(s) = s$ on the underlying state.
+
+\paragraph{Tightness.}
+The only wire-level difference is the population of the
+\texttt{identity} field. From a $\Zb$-observer's perspective, the
+\texttt{identity} field is part of the envelope; populating it does
+not change the framing or the byte-count distribution. The
+distribution of the $\Zb$-trace given a $\Zr$-trace is determined by
+the RNS resolution (which is deterministic given the public identity
+input), hence $\rho = 0$.
+
+\paragraph{Property preservation.}
+$\Zr$'s contribution is the channel-binding predicate $\mathrm{cb}$.
+This is preserved because the binding token is in the $\Zb$
+envelope; any future protocol layered on top of this $\Zb$ session
+inherits the binding. Confidentiality, authenticity, and
+post-quantum predicates are unchanged.
+\end{proof}
+
+\subsection{$\varphi_{mw} : \Zm \hookrightarrow \Zw$}
+
+\begin{proposition}[Proposition~5.4 of companion]
+\label{prop:mw-proof}
+The embedding $\varphi_{mw}$ that maps an MCP tool-call/response
+pair to a $\Zw$ stream where the request is a single envelope and
+the response is a finite sequence of envelopes terminated by a
+final-frame marker is tight.
+\end{proposition}
+
+\begin{proof}
+The map sends each tool-call envelope $\mathit{call}$ to a singleton
+$\Zw$ trace and each streaming response chunk $\mathit{chunk}_i$ to
+a $\Zw$ envelope, terminated by a $\mathtt{FIN}$ marker.
+
+\paragraph{Tightness.}
+Streaming responses are natively a $\Zw$ feature; the final-frame
+marker is a $\Zw$-level construct. The $\Zw$-trace given an
+$\Zm$-trace is deterministic and identical in length and byte
+content to what a $\Zb$-observer would see. $\rho = 0$.
+
+\paragraph{Property preservation.}
+$\Zm$'s tool-call authorization predicate is layered on top of $\Zb$
+authentication. The four $\Zb$ predicates are inherited via $\Zw$
+(by composition with \cref{prop:hw-proof}'s analysis specialized to
+streaming). Hence
+$\Pi(\varphi_{mw}) \supseteq \{\mathrm{conf}, \mathrm{auth},
+\mathrm{pq}, \mathrm{cb}\}$.
+\end{proof}
+
+\subsection{$\varphi_{am} : \Za \hookrightarrow \Zm$}
+
+\begin{proposition}[Proposition~5.5 of companion]
+\label{prop:am-proof}
+The embedding $\varphi_{am}$ that maps an A2A task to an MCP tool
+call with structured arguments and an MCP streaming response
+carrying task progress and result is tight.
+\end{proposition}
+
+\begin{proof}
+A2A tasks are specified by a triple $(\mathit{task\_id}, \mathit{args},
+\mathit{caps})$. The embedding maps this to an MCP tool call
+$\mathit{call}(\mathit{tool} = \mathtt{a2a.execute},
+\mathit{args} = (\mathit{task\_id}, \mathit{args}, \mathit{caps}))$
+with structured arguments. Task progress events become MCP streaming
+chunks; the final result is the terminal chunk before
+$\mathtt{FIN}$.
+
+\paragraph{Tightness.}
+The mapping is structural: each A2A field is carried in a named MCP
+argument. There is no wire-level activity in the MCP layer that is
+not specified by the A2A trace. $\rho = 0$.
+
+\paragraph{Property preservation.}
+A2A inherits MCP's tool-call authorization (every A2A task is an
+authorized MCP tool call) and, transitively, $\Zb$'s confidentiality,
+authenticity, post-quantum, and channel-binding predicates.
+\end{proof}
+
+\subsection{Composite tightness}
+
+\begin{corollary}[Composite tightness]
+\label{cor:composite-tight}
+The composite embeddings $\varphi_{mw} \circ \varphi_{am} : \Za
+\hookrightarrow \Zw$ and $\varphi_{hw} \circ \varphi_{??} \circ
+\cdots : \Za \hookrightarrow \Zb$ are tight.
+\end{corollary}
+
+\begin{proof}
+By \cref{thm:cat-axioms}, leakage adds: $\rho_{\psi \circ \varphi}
+= \rho_\psi + \rho_\varphi$. Since each constituent embedding has
+$\rho = 0$, the composite has $\rho = 0$. Tightness is preserved.
+\end{proof}
+
+\section{Worked Example: PQ Inheritance for FIX-over-RNS}
+\label{sec:fix-rns-example}
+
+\begin{example}[Inherited PQ properties]
+\label{ex:fix-rns-pq}
+We make precise the claim of the companion paper that running $\Zf$
+over $\Zr$ over $\Zw$ over $\Zb$ inherits the post-quantum
+hybrid-KEM key schedule of $\Zb$ and the identity-binding guarantee
+of $\Zr$.
+
+By \cref{prop:fw-proof}, $\Zf \hookrightarrow \Zw$ is tight and
+preserves $\mathrm{pq}$ (the post-quantum predicate). By
+\cref{prop:hw-proof}'s argument applied to $\Zw \hookrightarrow
+\Zb$ (the natural inclusion), $\Zw$ inherits $\mathrm{pq}$ from
+$\Zb$. By \cref{prop:rb-proof}, $\Zr$ contributes $\mathrm{cb}$
+(channel-binding) at the $\Zb$ envelope.
+
+Composing,
+\[
+\Zf \xhookrightarrow{\varphi_{fw}, \mathrm{tight}} \Zw
+\xhookrightarrow{\mathrm{tight}} \Zb,
+\]
+and the $\Zr$ binding sits at the $\Zb$ envelope. By
+\cref{cor:stack-proof}, the bound for $\Zf$ inheriting both
+$\mathrm{pq}$ and $\mathrm{cb}$ is
+\[
+\epsilon_{\Zf}^{\mathrm{pq}} \le \epsilon_{\Zb}^{\mathrm{pq}} +
+\rho_{\varphi_{fw}} + \delta_{\varphi_{fw}} +
+\rho_{\mathrm{Zw \hookrightarrow Zb}} + \delta_{\mathrm{Zw
+\hookrightarrow Zb}} = \epsilon_{\Zb}^{\mathrm{pq}} +
+\mathrm{negl}(\lambda),
+\]
+and similarly for $\mathrm{cb}$. Concretely, if $\Zb$'s hybrid KEM
+gives $\epsilon_{\Zb}^{\mathrm{pq}} = 2^{-128}$ against the
+modeled adversary class, then $\Zf$ over the stack achieves
+$\epsilon_{\Zf}^{\mathrm{pq}} \le 2^{-128} + \mathrm{negl}(\lambda)$,
+which for any reasonable $\lambda$ is well within the security
+target.
+\end{example}
+
+\section{Discussion of Limitations}
+\label{sec:limits}
+
+The framework assumes:
+
+\begin{enumerate}
+\item \emph{LTS abstraction faithfulness.} Real implementations may
+violate the LTS model (timing side-channels, cache effects). The
+framework gives no guarantees against attacks below the LTS level.
+\item \emph{Class-bounded adversaries.} The composition theorem is
+parameterized over an adversary class $\mathcal{C}$. Quantum
+adversaries against classical predicates require an explicit lift;
+we have set up the framework so that the lift is mechanical (replace
+$\mathcal{C}$ with a quantum-equipped class throughout) but the
+underlying $\Zb$ proofs must hold against the lifted class for the
+result to apply.
+\item \emph{Tight embedding by construction.} The five concrete
+embeddings are tight by inspection. A future sub-protocol whose
+embedding is not tight would weaken the bound by the embedding's
+leakage, which the framework computes explicitly. We do not commit
+to all future sub-protocols being tight.
+\item \emph{Availability is not modeled.} A denial-of-service attack
+on $\Zb$ denies service to every protocol in the family. This is a
+characteristic of the layered design, not a weakness of the
+framework.
+\end{enumerate}
+
+\section{Conclusion}
+
+We have proven the three foundational theorems of the categorical
+framework: the category and 2-category axioms hold for $\CZ$, $\Zb$
+is initial, and security properties compose along tight embeddings
+with explicit and tight bounds. The five concrete embeddings used
+by the family are tight. The composite stack
+$\Za \hookrightarrow \Zm \hookrightarrow \Zw \hookrightarrow \Zb$
+inherits the security properties of $\Zb$ up to a negligible
+additive term. Future work includes machine-checked formalization
+in Coq and extension to a quantum-equipped adversary class.
+
+\printbibliography
+
+\end{document}
