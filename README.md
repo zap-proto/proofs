@@ -1,5 +1,8 @@
 # ZAP Protocol — Proofs
 
+> **Docs:** [Formal proofs](https://zap-proto.dev/docs) · part of the [ZAP Protocol](https://zap-proto.io)
+
+
 Formal proofs accompanying the [papers](../papers/). Each proof is a standalone LaTeX document with theorems, lemmas, and explicit reductions/advantage bounds.
 
 | # | Proof | Pages | Theorems | Top-level result |
